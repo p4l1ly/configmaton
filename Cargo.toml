@@ -2,7 +2,6 @@
 name = "configmaton"
 version = "0.1.0"
 edition = "2021"
-channel = "nightly"
 
 [dependencies]
 serde = "1.0"
