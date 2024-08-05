@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::Value;
 
 mod reflike;
-use crate::reflike::Reflike;
+use crate::reflike::{RcRefCell, Reflike};
 
 // pub struct OnionIter<'a, L> {
 //     parent: Option<L>,
@@ -46,12 +46,12 @@ use crate::reflike::Reflike;
 //     }
 // }
 
-pub struct Onion<'a, L> {
-    parent: Option<L>,
+pub struct Onion<'a> {
+    parent: Option<RcRefCell<Onion<'a>>>,
     data: HashMap<&'a str, Value>,
 }
 
-impl <'a, L: Reflike<Onion<'a, L>>> Onion<'a, L>
+impl<'a> Onion<'a>
 {
     pub fn new() -> Self {
         Onion {
@@ -60,11 +60,11 @@ impl <'a, L: Reflike<Onion<'a, L>>> Onion<'a, L>
         }
     }
 
-    pub fn share(self) -> L {
-        L::from(self)
+    pub fn share(self) -> RcRefCell<Self> {
+        <RcRefCell<Self>>::from(self)
     }
 
-    pub fn new_level(parent: L) -> Self {
+    pub fn new_level(parent: RcRefCell<Self>) -> Self {
         Onion {
             parent: Some(parent.clone()),
             data: HashMap::new(),
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn recursive_onion_is_buildable() {
-        let grand_parent: RcRefCell<Onion<'_, _>> = RcRefCell::from(Onion::new());
+        let grand_parent = RcRefCell::from(Onion::new());
         let parent = RcRefCell::from(Onion::new_level(grand_parent));
     }
 
