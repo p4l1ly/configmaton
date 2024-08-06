@@ -1,8 +1,14 @@
 use std::collections::{HashMap, HashSet};
+use std::mem::MaybeUninit;
+use std::ptr::addr_of_mut;
 use serde_json::Value;
 
 mod lock;
+mod command;
+pub mod commands;
+
 use crate::lock::{LockSelector, Lock};
+use crate::command::{CommandBox, CommandTarget};
 
 pub struct Onion<'a, S: LockSelector> {
     parent: Option<S::Lock<Onion<'a, S>>>,
@@ -101,29 +107,34 @@ impl <'a, S: LockSelector> Iterator for OnionIter<'a, S>
 }
 
 
-pub struct Config {}
+pub trait Command {}
 
 pub struct Configmaton<'a, S: LockSelector> {
     onion: S::Lock<Onion<'a, S>>,
-    configs: HashSet<*const Config>,
+    commands: HashSet<CommandBox<'a, Self>>,
     stepping: bool,
     _phantom: std::marker::PhantomData<&'a ()>,
 }
 
+impl <'a, S: LockSelector> CommandTarget for Configmaton<'a, S> {}
+
 impl <'a, S: LockSelector> Configmaton<'a, S> {
-    pub fn new() -> Self {
-        Configmaton {
-            onion: Onion::<'a, S>::new().share(),
-            configs: HashSet::new(),
-            stepping: false,
-            _phantom: std::marker::PhantomData,
-        }
+    pub fn new(commands: HashSet<CommandBox<'a, Self>>) -> Self {
+        let mut uresult: MaybeUninit<Configmaton<'a, S>> = MaybeUninit::uninit();
+        let presult = uresult.as_mut_ptr();
+        unsafe { addr_of_mut!((*presult).onion).write(Onion::<'a, S>::new().share()) };
+        unsafe { addr_of_mut!((*presult).stepping).write(true) };
+        let commands1 = unsafe { (*presult).post_read(commands) };
+        unsafe { addr_of_mut!((*presult).commands).write(commands1) };
+        let mut result = unsafe { uresult.assume_init() };
+        result.stepping = false;
+        result
     }
 
     pub fn new_level(self) -> Self {
         Configmaton {
             onion: Onion::<'a, S>::new_level(self.onion).share(),
-            configs: self.configs.clone(),
+            commands: self.commands.clone(),
             stepping: false,
             _phantom: std::marker::PhantomData,
         }
@@ -134,21 +145,51 @@ impl <'a, S: LockSelector> Configmaton<'a, S> {
     }
 
     pub fn set(&mut self, key: &'a str, value: Value) {
-        self.onion.borrow_mut().set(key, value);
+        if self.stepping {
+            self.onion.borrow_mut().set(key, value);
+        } else {
+            self.stepping = true;
+
+            let commands1 = self.on_read(unsafe { std::ptr::read(&self.commands) }, key, &value);
+            let commands2 = self.post_read(commands1);
+            self.onion.borrow_mut().set(key, value);
+            unsafe { std::ptr::write(&mut self.commands, commands2) }
+            self.stepping = false;
+        }
     }
 
-    pub fn do_config<F>(&mut self, config: &Config, f: F)
-    where
-        F: FnOnce(&mut Self),
+    fn post_read(&mut self, mut commands: HashSet<CommandBox<'a, Self>>)
+        -> HashSet<CommandBox<'a, Self>>
     {
-        if self.configs.contains(&(config as *const Config)) {
-            return;
+        let mut visited = HashSet::new();
+        let mut new_commands = HashSet::new();
+
+        while let Some(state) = commands.iter().next().cloned() {
+            commands.remove(&state);
+            if !visited.insert(state.clone()) {
+                continue;
+            }
+            state.inner.execute_post(&mut commands, &mut new_commands, self);
         }
 
-        self.configs.insert(config as *const Config);
-        self.stepping = true;
-        f(self);
-        self.stepping = false;
+        return new_commands;
+    }
+
+    fn on_read(&mut self, mut commands: HashSet<CommandBox<'a, Self>>, key: &str, value: &Value)
+        -> HashSet<CommandBox<'a, Self>>
+    {
+        let mut visited = HashSet::new();
+        let mut new_commands = HashSet::new();
+
+        while let Some(state) = commands.iter().next().cloned() {
+            commands.remove(&state);
+            if !visited.insert(state.clone()) {
+                continue;
+            }
+            state.inner.execute(key, value, &mut commands, &mut new_commands, self);
+        }
+
+        return new_commands;
     }
 }
 
