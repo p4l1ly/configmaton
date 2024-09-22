@@ -10,12 +10,12 @@ pub mod commands;
 use crate::lock::{LockSelector, Lock};
 use crate::command::{CommandBox, CommandTarget};
 
-pub struct Onion<'a, S: LockSelector> {
-    parent: Option<S::Lock<Onion<'a, S>>>,
-    data: HashMap<&'a str, Value>,
+pub struct Onion<S: LockSelector> {
+    parent: Option<S::Lock<Onion<S>>>,
+    data: HashMap<String, Value>,
 }
 
-impl<'a, S: LockSelector> Onion<'a, S>
+impl<S: LockSelector> Onion<S>
 {
     pub fn new() -> Self {
         Onion {
@@ -60,39 +60,39 @@ impl<'a, S: LockSelector> Onion<'a, S>
         }
     }
 
-    pub fn set(&mut self, key: &'a str, value: Value) {
+    pub fn set(&mut self, key: String, value: Value) {
         self.data.insert(key, value);
     }
 
-    pub fn iter(&self) -> OnionIter<'a, S> {
+    pub fn iter(&self) -> OnionIter<S> {
         OnionIter::new(self)
     }
 }
 
-pub struct OnionIter<'a, S: LockSelector> {
-    parent: Option<S::Lock<Onion<'a, S>>>,
-    visited: HashSet<&'a str>,
-    items: Vec<(&'a str, Value)>,
+pub struct OnionIter<S: LockSelector> {
+    parent: Option<S::Lock<Onion<S>>>,
+    visited: HashSet<String>,
+    items: Vec<(String, Value)>,
 }
 
-impl <'a, S: LockSelector> OnionIter<'a, S> {
-    pub fn new(onion: &Onion<'a, S>) -> Self {
+impl <S: LockSelector> OnionIter<S> {
+    pub fn new(onion: &Onion<S>) -> Self {
         OnionIter {
             parent: onion.parent.clone(),
             visited: HashSet::new(),
-            items: onion.data.iter().map(|(key, val)| (*key, val.clone())).collect(),
+            items: onion.data.iter().map(|(key, val)| (key.clone(), val.clone())).collect(),
         }
     }
 }
 
-impl <'a, S: LockSelector> Iterator for OnionIter<'a, S>
+impl <S: LockSelector> Iterator for OnionIter<S>
 {
-    type Item = (&'a str, Value);
+    type Item = (String, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             while let Some((key, value)) = self.items.pop() {
-                if self.visited.insert(key) {
+                if self.visited.insert(key.clone()) {
                     return Some((key, value));
                 }
             }
@@ -100,7 +100,7 @@ impl <'a, S: LockSelector> Iterator for OnionIter<'a, S>
             let parent_ref = self.parent.take()?;
             let parent_onion = parent_ref.borrow();
 
-            self.items.extend(parent_onion.data.iter().map(|(key, val)| (*key, val.clone())));
+            self.items.extend(parent_onion.data.iter().map(|(key, val)| (key.clone(), val.clone())));
             self.parent = parent_onion.parent.clone();
         }
     }
@@ -109,20 +109,41 @@ impl <'a, S: LockSelector> Iterator for OnionIter<'a, S>
 
 pub trait Command {}
 
-pub struct Configmaton<'a, S: LockSelector> {
-    onion: S::Lock<Onion<'a, S>>,
-    commands: HashSet<CommandBox<'a, Self>>,
+pub struct Configmaton<S: LockSelector> {
+    onion: S::Lock<Onion<S>>,
+    commands: HashSet<CommandBox<Self>>,
     stepping: bool,
-    _phantom: std::marker::PhantomData<&'a ()>,
 }
 
-impl <'a, S: LockSelector> CommandTarget for Configmaton<'a, S> {}
+impl <S: LockSelector> CommandTarget for Configmaton<S> {
+    fn custom_fn(&mut self, value: &Value) {
+        println!("CustomFn {}", value);
+    }
 
-impl <'a, S: LockSelector> Configmaton<'a, S> {
-    pub fn new(commands: HashSet<CommandBox<'a, Self>>) -> Self {
-        let mut uresult: MaybeUninit<Configmaton<'a, S>> = MaybeUninit::uninit();
+    fn set(&mut self, key: &str, value: Value) {
+        if self.stepping {
+            self.onion.borrow_mut().set(key.to_string(), value);
+        } else {
+            self.stepping = true;
+
+            let commands1 = self.on_read(unsafe { std::ptr::read(&self.commands) }, key, &value);
+            let commands2 = self.post_read(commands1);
+            self.onion.borrow_mut().set(key.to_string(), value);
+            unsafe { std::ptr::write(&mut self.commands, commands2) }
+            self.stepping = false;
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<Value> {
+        self.onion.borrow().get(key)
+    }
+}
+
+impl <S: LockSelector> Configmaton<S> {
+    pub fn new(commands: HashSet<CommandBox<Self>>) -> Self {
+        let mut uresult: MaybeUninit<Configmaton<S>> = MaybeUninit::uninit();
         let presult = uresult.as_mut_ptr();
-        unsafe { addr_of_mut!((*presult).onion).write(Onion::<'a, S>::new().share()) };
+        unsafe { addr_of_mut!((*presult).onion).write(Onion::<S>::new().share()) };
         unsafe { addr_of_mut!((*presult).stepping).write(true) };
         let commands1 = unsafe { (*presult).post_read(commands) };
         unsafe { addr_of_mut!((*presult).commands).write(commands1) };
@@ -133,10 +154,9 @@ impl <'a, S: LockSelector> Configmaton<'a, S> {
 
     pub fn new_level(self) -> Self {
         Configmaton {
-            onion: Onion::<'a, S>::new_level(self.onion).share(),
+            onion: Onion::<S>::new_level(self.onion).share(),
             commands: self.commands.clone(),
             stepping: false,
-            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -144,49 +164,35 @@ impl <'a, S: LockSelector> Configmaton<'a, S> {
         self.onion.borrow().get(key)
     }
 
-    pub fn set(&mut self, key: &'a str, value: Value) {
-        if self.stepping {
-            self.onion.borrow_mut().set(key, value);
-        } else {
-            self.stepping = true;
-
-            let commands1 = self.on_read(unsafe { std::ptr::read(&self.commands) }, key, &value);
-            let commands2 = self.post_read(commands1);
-            self.onion.borrow_mut().set(key, value);
-            unsafe { std::ptr::write(&mut self.commands, commands2) }
-            self.stepping = false;
-        }
-    }
-
-    fn post_read(&mut self, mut commands: HashSet<CommandBox<'a, Self>>)
-        -> HashSet<CommandBox<'a, Self>>
+    fn post_read(&mut self, mut commands: HashSet<CommandBox<Self>>)
+        -> HashSet<CommandBox<Self>>
     {
         let mut visited = HashSet::new();
         let mut new_commands = HashSet::new();
 
         while let Some(state) = commands.iter().next().cloned() {
             commands.remove(&state);
-            if !visited.insert(state.clone()) {
+            if !visited.insert(state) {
                 continue;
             }
-            state.inner.execute_post(&mut commands, &mut new_commands, self);
+            unsafe { &*state.inner }.execute_post(&mut commands, &mut new_commands, self);
         }
 
         return new_commands;
     }
 
-    fn on_read(&mut self, mut commands: HashSet<CommandBox<'a, Self>>, key: &str, value: &Value)
-        -> HashSet<CommandBox<'a, Self>>
+    fn on_read(&mut self, mut commands: HashSet<CommandBox<Self>>, key: &str, value: &Value)
+        -> HashSet<CommandBox<Self>>
     {
         let mut visited = HashSet::new();
         let mut new_commands = HashSet::new();
 
         while let Some(state) = commands.iter().next().cloned() {
             commands.remove(&state);
-            if !visited.insert(state.clone()) {
+            if !visited.insert(state) {
                 continue;
             }
-            state.inner.execute(key, value, &mut commands, &mut new_commands, self);
+            unsafe { &*state.inner }.execute(key, value, &mut commands, &mut new_commands, self);
         }
 
         return new_commands;
@@ -202,18 +208,18 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let mut onion1 = Onion::<'_, RcRefCellSelector>::new();
-        onion1.set("a", Value::Number(Number::from(1)));
-        onion1.set("b", Value::Number(Number::from(2)));
-        onion1.set("a", Value::Number(Number::from(3)));
+        let mut onion1 = Onion::<RcRefCellSelector>::new();
+        onion1.set("a".to_string(), Value::Number(Number::from(1)));
+        onion1.set("b".to_string(), Value::Number(Number::from(2)));
+        onion1.set("a".to_string(), Value::Number(Number::from(3)));
         assert_eq!(onion1.get("a"), Some(Value::Number(Number::from(3))));
         assert_eq!(onion1.get("b"), Some(Value::Number(Number::from(2))));
         assert_eq!(onion1.get("c"), None);
 
         let onion1 = onion1.share();
-        let mut onion2 = Onion::<'_, RcRefCellSelector>::new_level(onion1.clone());
-        onion2.set("b", Value::Number(Number::from(4)));
-        onion2.set("c", Value::Number(Number::from(5)));
+        let mut onion2 = Onion::<RcRefCellSelector>::new_level(onion1.clone());
+        onion2.set("b".to_string(), Value::Number(Number::from(4)));
+        onion2.set("c".to_string(), Value::Number(Number::from(5)));
         assert_eq!(onion2.get("a"), Some(Value::Number(Number::from(3))));
         assert_eq!(onion2.get("b"), Some(Value::Number(Number::from(4))));
         assert_eq!(onion2.get("c"), Some(Value::Number(Number::from(5))));
@@ -223,7 +229,7 @@ mod tests {
         assert_eq!(onion1.borrow().get("b"), Some(Value::Number(Number::from(2))));
         assert_eq!(onion1.borrow().get("c"), None);
 
-        onion1.borrow_mut().set("a", Value::Number(Number::from(6)));
+        onion1.borrow_mut().set("a".to_string(), Value::Number(Number::from(6)));
         assert_eq!(onion1.borrow().get("a"), Some(Value::Number(Number::from(6))));
         assert_eq!(onion2.get("a"), Some(Value::Number(Number::from(6))));
     }
