@@ -2,38 +2,41 @@ use std::{collections::{HashMap, HashSet}, hash::Hash};
 
 use crate::lock::{LockSelector, Lock};
 
-pub struct State<Symbol: Eq, Out, S: LockSelector> {
+type StateLock<Symbol, S> = <S as LockSelector>::Lock<State<Symbol, S>>;
+
+pub struct State<Symbol: Eq, S: LockSelector> {
     // This is very like in the traditional finite automata. Each state has a set of transitions
     // via symbols to other states. If multiple states are parallel (let's say nondeterministic)
     // successors of a state via the same symbol, they are stored in a single vector.
-    pub transitions: Box<[(Symbol, Box<[S::Lock<State<Symbol, Out, S>>]>)]>,
+    pub transitions: Box<[(Symbol, Box<[StateLock<Symbol, S>]>)]>,
 
     // In traditional finite automata, this would be a boolean value (final / nonfinal state).
     // Here, we will combine and nest multiple "traditional" automata into one, and the higher
     // level reasoning needs to know, which automaton of the original ones is currently in a final
     // nonfinal state. The markers for the original automata that are in a final configuration when
     // we are in this state are stored here.
-    pub outputs: Box<[Out]>,
+    pub outputs: Box<[usize]>,
 }
 
-pub struct Automaton<Symbol: Eq, Out: Hash + Eq, S: LockSelector> {
+pub struct Automaton<Symbol: Eq, S: LockSelector> {
     // Union of outputs of the current states.
-    pub outputs: HashMap<Out, usize>,
+    pub outputs: Box<[usize]>,
 
     // Mapping from symbols to such current states from which a transition via the symbol exists.
-    pub listeners: HashMap<Symbol, HashSet<S::Lock<State<Symbol, Out, S>>>>,
+    pub listeners: HashMap<Symbol, HashSet<StateLock<Symbol, S>>>,
 }
 
-impl<Symbol: Hash + Eq + Copy, Out: Hash + Eq + Copy, S: LockSelector>
-Automaton<Symbol, Out, S>
-where S::Lock<State<Symbol, Out, S>>: Hash + Eq,
+impl<Symbol: Hash + Eq + Copy, S: LockSelector>
+Automaton<Symbol, S>
+where StateLock<Symbol, S>: Hash + Eq,
 {
     // Initialize the state of the automaton.
-    pub fn new<I>(initial_states: I) -> Self
+    pub fn new<I>(initial_states: I, output_count: usize) -> Self
     where
-        I: IntoIterator<Item = S::Lock<State<Symbol, Out, S>>>,
+        I: IntoIterator<Item = StateLock<Symbol, S>>,
     {
-        let mut outputs = HashMap::new();
+        // boxed slice of size `output_count`
+        let mut outputs = vec![0; output_count].into_boxed_slice();
         let mut listeners = HashMap::new();
         for state_lock in initial_states.into_iter() {
             let state = state_lock.borrow();
@@ -43,16 +46,16 @@ where S::Lock<State<Symbol, Out, S>>: Hash + Eq,
                     .or_insert_with(HashSet::new)
                     .insert(state_lock.clone());
             }
-            for output in state.outputs.iter() {
-                *outputs.entry(*output).or_insert(0) += 1;
+            for output in state.outputs.iter().copied() {
+                outputs[output] += 1;
             }
         }
         Automaton { outputs, listeners }
     }
 
     // Read a symbol, perform transitions, and return new and removed outputs.
-    pub fn read(&mut self, symbol: Symbol) -> (Vec<Out>, Vec<Out>) {
-        let mut old_states: HashSet<S::Lock<State<Symbol, Out, S>>>;
+    pub fn read(&mut self, symbol: Symbol) -> (Vec<usize>, Vec<usize>) {
+        let mut old_states: HashSet<StateLock<Symbol, S>>;
         let mut new_outputs = Vec::new();
         let mut removed_outputs = Vec::new();
 
@@ -124,11 +127,11 @@ where S::Lock<State<Symbol, Out, S>>: Hash + Eq,
 
                         // Update the automaton outputs with outputs of new right states.
                         if right_state_is_new {
-                            for output in right_state.outputs.iter() {
-                                let entry = self.outputs.entry(*output).or_insert(0);
+                            for output in right_state.outputs.iter().copied() {
+                                let entry = &mut self.outputs[output];
                                 if *entry == 0 {
                                     *entry = 1;
-                                    new_outputs.push(*output);
+                                    new_outputs.push(output);
                                 } else {
                                     *entry += 1;
                                 }
@@ -147,13 +150,13 @@ where S::Lock<State<Symbol, Out, S>>: Hash + Eq,
         // the end, otherwise `new_outputs` could contain something that is not really new.
         for left_state_lock in old_states.iter() {
             let left_state = left_state_lock.borrow();
-            for out in left_state.outputs.iter() {
-                if let Some(count) = self.outputs.get_mut(out) {
-                    *count -= 1;
-                    if *count == 0 {
-                        self.outputs.remove(out);
-                        removed_outputs.push(*out);
-                    }
+            for output in left_state.outputs.iter().copied() {
+                let entry = &mut self.outputs[output];
+                if *entry == 1 {
+                    *entry = 0;
+                    removed_outputs.push(output);
+                } else {
+                    *entry -= 1;
                 }
             }
         }
@@ -175,19 +178,19 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let state1: RcRefCell<State<_, _, RcRefCellSelector>> = RcRefCell::new(State {
+        let state1: RcRefCell<State<_, RcRefCellSelector>> = RcRefCell::new(State {
             transitions: Box::new([(1, Box::new([]))]),
             outputs: Box::new([1]),
         });
-        let state2: RcRefCell<State<_, _, RcRefCellSelector>> = RcRefCell::new(State {
+        let state2: RcRefCell<State<_, RcRefCellSelector>> = RcRefCell::new(State {
             transitions: Box::new([(2, Box::new([]))]),
             outputs: Box::new([2]),
         });
-        let state3: RcRefCell<State<_, _, RcRefCellSelector>> = RcRefCell::new(State {
+        let state3: RcRefCell<State<_, RcRefCellSelector>> = RcRefCell::new(State {
             transitions: Box::new([(3, Box::new([state1.clone()]))]),
             outputs: Box::new([3]),
         });
-        let state4: RcRefCell<State<_, _, RcRefCellSelector>> = RcRefCell::new(State {
+        let state4: RcRefCell<State<_, RcRefCellSelector>> = RcRefCell::new(State {
             transitions: Box::new([(2, Box::new([state1.clone()]))]),
             outputs: Box::new([4]),
         });
@@ -196,11 +199,11 @@ mod tests {
         state2.borrow_mut().transitions[0].1 = Box::new([state3.clone()]);
         state3.borrow_mut().transitions[0].1 = Box::new([state1.clone(), state4.clone()]);
 
-        let mut automaton = Automaton::<u8, u8, RcRefCellSelector>::new(vec![state1]);
-        let no_out: Vec<u8> = Vec::new();
-        let no_change: (Vec<u8>, Vec<u8>) = (no_out.clone(), no_out.clone());
+        let mut automaton = Automaton::<u8, RcRefCellSelector>::new(vec![state1], 5);
+        let no_out: Vec<usize> = Vec::new();
+        let no_change: (Vec<usize>, Vec<usize>) = (no_out.clone(), no_out.clone());
 
-        assert_eq!(automaton.outputs.keys().cloned().collect::<Vec<_>>(), vec![1]);
+        assert_eq!(automaton.outputs, vec![0, 1, 0, 0, 0].into_boxed_slice());
         assert_eq!(automaton.read(1), (vec![2], vec![1]));
         assert_eq!(automaton.read(2), (vec![3], vec![2]));
         assert_eq!(automaton.read(2), no_change);
