@@ -16,12 +16,38 @@ pub trait LockSelector {
     type Lock<T>: Lock<T>;
 }
 
-pub struct RcRefCell<T>(std::rc::Rc<RefCell<T>>);
-
 pub struct RcRefCellSelector {}
 impl LockSelector for RcRefCellSelector {
     type Lock<T> = RcRefCell<T>;
 }
+
+pub struct RcRefCell<T>(std::rc::Rc<RefCell<T>>);
+
+impl<T> RcRefCell<T> {
+    pub fn new(x: T) -> Self {
+        RcRefCell(std::rc::Rc::new(RefCell::new(x)))
+    }
+}
+
+impl<T> std::fmt::Debug for RcRefCell<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RcRefCell({:?})", self.0.as_ptr())
+    }
+}
+
+impl<T> std::hash::Hash for RcRefCell<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(&*self.0, state);
+    }
+}
+
+impl<T> PartialEq for RcRefCell<T> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(&*self.0, &*other.0)
+    }
+}
+
+impl<T> Eq for RcRefCell<T> { }
 
 impl<T> Clone for RcRefCell<T> {
     fn clone(&self) -> Self {

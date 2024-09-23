@@ -3,9 +3,10 @@ use std::mem::MaybeUninit;
 use std::ptr::addr_of_mut;
 use serde_json::Value;
 
-mod lock;
-mod command;
+pub mod lock;
+pub mod command;
 pub mod commands;
+pub mod automaton;
 
 use crate::lock::{LockSelector, Lock};
 use crate::command::{CommandBox, CommandTarget};
