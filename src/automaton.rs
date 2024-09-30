@@ -319,28 +319,43 @@ mod tests {
     fn explicit_works() {
         let qs = vec![new_state(), new_state(), new_state(), new_state()];
 
-        let to_listeners = |state_ixs: Vec<usize>|
-        {
+        let to_listeners = |state_ixs: Vec<usize>| {
             (HashSet::from_iter(state_ixs.into_iter().map(|i| qs[i].clone())), vec![])
         };
 
-        set_explicit(&qs[0], vec![(Explicit::Char('1'), vec![qs[1].clone()])]);
-        set_explicit(&qs[1], vec![(Explicit::Char('2'), vec![qs[2].clone()])]);
-        set_explicit(&qs[2], vec![(Explicit::Char('3'), vec![qs[0].clone(), qs[3].clone()])]);
-        set_explicit(&qs[3], vec![(Explicit::Char('2'), vec![qs[0].clone().clone()])]);
+        let my_set_explicit = |state_ix: usize, transitions: Vec<(char, Vec<usize>)>| {
+            set_explicit(&qs[state_ix], transitions.into_iter().map(|(sym, states)|
+                (
+                    Explicit::Char(sym),
+                    states.into_iter().map(
+                        |i| qs[i].clone()).collect::<Vec<_>>()
+                )
+            ).collect::<Vec<_>>());
+        };
+
+        my_set_explicit(0, vec![('1', vec![1])]);
+        my_set_explicit(1, vec![('2', vec![2])]);
+        my_set_explicit(2, vec![('3', vec![0, 3])]);
+        my_set_explicit(3, vec![('2', vec![0])]);
 
         let mut automaton = Listeners::<RcRefCellSelector>::new(vec![qs[0].clone()]);
+        let mut my_read = |sym: char| {
+            automaton.read(Explicit::Char(sym), HashSet::new())
+        };
+        let mut read_and_check_predecessors = |sym: char, expected: Vec<usize>| {
+            assert_eq!(my_read(sym), to_listeners(expected));
+        };
 
-        assert_eq!(automaton.read(Explicit::Char('1'), HashSet::new()), to_listeners(vec![0]));
-        assert_eq!(automaton.read(Explicit::Char('2'), HashSet::new()), to_listeners(vec![1]));
-        assert_eq!(automaton.read(Explicit::Char('2'), HashSet::new()), to_listeners(vec![]));
-        assert_eq!(automaton.read(Explicit::Char('1'), HashSet::new()), to_listeners(vec![]));
-        assert_eq!(automaton.read(Explicit::Char('3'), HashSet::new()), to_listeners(vec![2]));
-        assert_eq!(automaton.read(Explicit::Char('1'), HashSet::new()), to_listeners(vec![0]));
-        assert_eq!(automaton.read(Explicit::Char('2'), HashSet::new()), to_listeners(vec![1, 3]));
-        assert_eq!(automaton.read(Explicit::Char('3'), HashSet::new()), to_listeners(vec![2]));
-        assert_eq!(automaton.read(Explicit::Char('2'), HashSet::new()), to_listeners(vec![3]));
-        assert_eq!(automaton.read(Explicit::Char('1'), HashSet::new()), to_listeners(vec![0]));
-        assert_eq!(automaton.read(Explicit::Char('2'), HashSet::new()), to_listeners(vec![1]));
+        read_and_check_predecessors('1', vec![0]);
+        read_and_check_predecessors('2', vec![1]);
+        read_and_check_predecessors('2', vec![]);
+        read_and_check_predecessors('1', vec![]);
+        read_and_check_predecessors('3', vec![2]);
+        read_and_check_predecessors('1', vec![0]);
+        read_and_check_predecessors('2', vec![1, 3]);
+        read_and_check_predecessors('3', vec![2]);
+        read_and_check_predecessors('2', vec![3]);
+        read_and_check_predecessors('1', vec![0]);
+        read_and_check_predecessors('2', vec![1]);
     }
 }
