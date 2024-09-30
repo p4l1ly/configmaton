@@ -7,6 +7,7 @@ pub mod lock;
 pub mod command;
 pub mod commands;
 pub mod automaton;
+pub mod lang_intersection;
 
 use crate::lock::{LockSelector, Lock};
 use crate::command::{CommandBox, CommandTarget};

@@ -35,7 +35,6 @@ where StateLock<Symbol, S>: Hash + Eq,
     where
         I: IntoIterator<Item = StateLock<Symbol, S>>,
     {
-        // boxed slice of size `output_count`
         let mut outputs = vec![0; output_count].into_boxed_slice();
         let mut listeners = HashMap::new();
         for state_lock in initial_states.into_iter() {
