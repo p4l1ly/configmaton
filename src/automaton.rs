@@ -71,7 +71,6 @@ pub struct State<S: LockSelector> {
     // successors of a state via the same symbol, they are stored in a single vector.
     pub explicit_transitions: Box<[(Explicit, Box<[StateLock<S>]>)]>,
     pub pattern_transitions: Box<[(Pattern, Box<[StateLock<S>]>)]>,
-    pub marker: bool,  // WARNING: read must be locked because of this field.
 }
 
 pub struct Listeners<S: LockSelector> {
@@ -132,14 +131,9 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
         }
 
         for pattern in patterns.iter() {
-            if let Some(states) = self.pattern_listeners.get_mut(pattern) {
-                if states.is_empty() {
-                    pattern_old_statess.push(HashSet::new());
-                    continue;
-                }
-
+            if let Some(states) = self.pattern_listeners.remove(pattern) {
                 any_pattern = true;
-                pattern_old_statess.push(std::mem::take(states));
+                pattern_old_statess.push(states);
             } else {
                 pattern_old_statess.push(HashSet::new());
             }
@@ -162,51 +156,46 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
             }
         }
 
-        // The following should be locked, globally for the structure of states.
+        dbg!(all_old_states);
 
-        // First, let's detect, which old_states will not be removed. We remove them from
-        // old_states and reinsert them to the new_states.
+        // First, let's remove all listeners for transitions of the old states
         for left_state_lock in all_old_states.iter() {
-            let mut left_state = left_state_lock.borrow_mut();
-            let mut self_transition = false;
-
-            for (sym, right_states) in left_state.explicit_transitions.iter() {
-                if explicit == *sym {
-                    for right_state_lock in right_states.iter() {
-                        if right_state_lock == left_state_lock {
-                            self_transition = true;
-                            continue;
-                        }
-                        if all_old_states.contains(right_state_lock) {
-                            right_state_lock.borrow_mut().marker = true;
-                            continue;
-                        }
-                    }
+            let left_state = left_state_lock.borrow();
+            for (sym, _) in left_state.explicit_transitions.iter() {
+                if explicit != *sym {
+                    // Remove listeners for transitions of the left_state (other than the one via
+                    // `symbol` which is already removed).
+                    self.explicit_listeners.get_mut(&sym).unwrap().remove(left_state_lock);
                 }
             }
 
-            for (pattern, right_states) in left_state.pattern_transitions.iter() {
-                if patterns.contains(pattern) {
-                    for right_state_lock in right_states.iter() {
-                        if right_state_lock == left_state_lock {
-                            self_transition = true;
-                            continue;
-                        }
-                        if all_old_states.contains(right_state_lock) {
-                            right_state_lock.borrow_mut().marker = true;
-                            continue;
+            for (pattern, _) in left_state.pattern_transitions.iter() {
+                if !patterns.contains(pattern) {
+                    // Remove listeners for transitions of the left_state (other than the one via
+                    // `pattern` which is already removed). This is different from the explicit
+                    // part because we want to remove the `pattern` key from `pattern_listeners`,
+                    // because `pattern_listeners` are iterated over in `get_satisfied_patterns`.
+
+                    match self.pattern_listeners.entry(pattern.clone()) {
+                        Entry::Occupied(mut entry) => {
+                            let is_empty = {
+                                let x = entry.get_mut();
+                                x.remove(left_state_lock);
+                                x.is_empty()
+                            };
+                            if is_empty {
+                                entry.remove();
+                            }
+                        },
+                        Entry::Vacant(_) => {
+                            panic!("Removing unregistered pattern listener.");
                         }
                     }
                 }
-            }
-
-            if self_transition {
-                left_state.marker = true;
             }
         }
 
-        // Then, let's remove all listeners for transitions of the remaining old_states, register
-        // new listeners for transitions of their successors (successors via `symbol`).
+        // Then, let's register new listeners for transitions of the successors.
         for left_state_lock in all_old_states.iter() {
             let left_state = left_state_lock.borrow();
             for (sym, right_states) in left_state.explicit_transitions.iter() {
@@ -232,10 +221,6 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
                                 { continue 'outer; }
                         }
                     }
-                } else {
-                    // Remove listeners for transitions of the left_state (other than the one via
-                    // `symbol` which is already removed).
-                    self.explicit_listeners.get_mut(&sym).unwrap().remove(left_state_lock);
                 }
             }
 
@@ -266,33 +251,8 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
                                 { continue 'outer; }
                         }
                     }
-                } else {
-                    // Remove listeners for transitions of the left_state (other than the one via
-                    // `pattern` which is already removed). This is different from the explicit
-                    // part because we want to remove the `pattern` key from `pattern_listeners`,
-                    // because `pattern_listeners` are iterated over in `get_satisfied_patterns`.
-
-                    match self.pattern_listeners.entry(pattern.clone()) {
-                        Entry::Occupied(mut entry) => {
-                            let is_empty = {
-                                let x = entry.get_mut();
-                                x.remove(left_state_lock);
-                                x.is_empty()
-                            };
-                            if is_empty {
-                                entry.remove();
-                            }
-                        },
-                        Entry::Vacant(_) => {
-                            panic!("Removing unregistered pattern listener.");
-                        }
-                    }
                 }
             }
-        }
-
-        for left_state_lock in all_old_states.iter() {
-            left_state_lock.borrow_mut().marker = false;
         }
 
         (explicit_old_states, pattern_old_statess)
@@ -353,7 +313,6 @@ mod tests {
         let result = RcRefCell::new(State {
             explicit_transitions: Box::new([]),
             pattern_transitions: Box::new([]),
-            marker: false,
         });
         dbg!(&result);
         result
@@ -507,12 +466,53 @@ mod tests {
         read_and_check_predecessors('b', vec![], vec![1, 3], vec![]);
         // 0-2- 0-any->3 2--c-->3
         read_and_check_predecessors('c', vec![any], vec![2], vec![vec![0]]);
-        // 0--3 3--b-->0
-        read_and_check_predecessors('b', vec![], vec![3], vec![]);
-        // 0--- 0--a-->1 0-any->3 3--nb->3
-        read_and_check_predecessors('a', vec![any], vec![0], vec![vec![0]]);
+        // 0--3 0-any->3 3--b-->0
+        read_and_check_predecessors('b', vec![any], vec![3], vec![vec![0]]);
+        // 0--3 0--a-->1 0-any->3 3--nb->3
+        read_and_check_predecessors('a', vec![any, nb], vec![0], vec![vec![0], vec![3]]);
         // -1-3 1--b-->2 3--b-->0
         read_and_check_predecessors('b', vec![], vec![1, 3], vec![]);
+
+        let mut automaton = Listeners::<RcRefCellSelector>::new(vec![qs[0].clone()]);
+        let mut read_and_check_predecessors =
+            |
+                sym: char,
+                expected: Vec<usize>,
+                expected_patterns: Vec<(usize, Vec<usize>)>,
+            | {
+            let pre = automaton.read(Explicit::Char(sym));
+            let expected2 = HashSet::from_iter(expected.into_iter().map(|i| qs[i].clone()));
+            assert_eq!(pre.0, expected2);
+
+            let pre_patterns = pre.1.into_iter().collect::<HashMap<_, _>>();
+            let expected_patterns3 = expected_patterns.into_iter().map(|(pix, states)|
+                (pats[pix].clone(), HashSet::from_iter(states.into_iter().map(|i| qs[i].clone())))
+            ).collect::<HashMap<_, _>>();
+            assert_eq!(pre_patterns, expected_patterns3);
+        };
+
+        // 0--- 0--a-->1 0-any->3
+        read_and_check_predecessors('a', vec![0], vec![(any, vec![0])]);
+        // -1-3 1--b-->2 3--b-->0
+        read_and_check_predecessors('b', vec![1, 3], vec![]);
+        // 0-2- 0-any->3
+        read_and_check_predecessors('b', vec![], vec![(any, vec![0])]);
+        // --23 3--nb->0
+        read_and_check_predecessors('a', vec![], vec![(nb, vec![3])]);
+        // -123 2--c-->0 2--c-->3 3--nb->3
+        read_and_check_predecessors('c', vec![2], vec![(nb, vec![3])]);
+        // 01-3 0--c-->1 0-any->3 3--nb->3
+        read_and_check_predecessors('a', vec![0], vec![(any, vec![0]), (nb, vec![3])]);
+        // -1-3 1--b-->2 3--b-->0
+        read_and_check_predecessors('b', vec![1, 3], vec![]);
+        // 0-2- 0-any->3 2--c-->3
+        read_and_check_predecessors('c', vec![2], vec![(any, vec![0])]);
+        // 0--3 0-any->3 3--b-->0
+        read_and_check_predecessors('b', vec![3], vec![(any, vec![0])]);
+        // 0--3 0--a-->1 0-any->3 3--nb->3
+        read_and_check_predecessors('a', vec![0], vec![(any, vec![0]), (nb, vec![3])]);
+        // -1-3 1--b-->2 3--b-->0
+        read_and_check_predecessors('b', vec![1, 3], vec![]);
     }
 
     #[test]
