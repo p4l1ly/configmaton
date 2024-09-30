@@ -208,7 +208,7 @@ mod tests {
     use crate::lock::RcRefCellSelector;
 
     #[test]
-    fn it_works() {
+    fn onion_works() {
         let mut onion1 = Onion::<RcRefCellSelector>::new();
         onion1.set("a".to_string(), Value::Number(Number::from(1)));
         onion1.set("b".to_string(), Value::Number(Number::from(2)));
