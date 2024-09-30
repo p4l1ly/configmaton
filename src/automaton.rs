@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet, hash_map::Entry}, hash::Hash};
+use std::{collections::{HashMap, HashSet, hash_map::Entry, hash_set}, hash::Hash, vec, iter::Zip};
 
 use crate::lock::{LockSelector, Lock};
 use serde_json::Number;
@@ -115,7 +115,7 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
     // set contains the states from which transitions have been triggered via `explicit`. The
     // second vector contains the sets of states from which transitions have been triggered via
     // the patterns in the order of `patterns.iter()`.
-    pub fn read(&mut self, explicit: Explicit, patterns: HashSet<Pattern>)
+    pub fn read_with_patterns(&mut self, explicit: Explicit, patterns: &HashSet<Pattern>)
         -> (HashSet<StateLock<S>>, Vec<HashSet<StateLock<S>>>)
     {
         dbg!(&explicit, &patterns, &self.explicit_listeners, &self.pattern_listeners);
@@ -298,8 +298,16 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
         (explicit_old_states, pattern_old_statess)
     }
 
-    pub fn get_active_satisfied_patterns(&self, explicit: Explicit) -> HashSet<Pattern> {
-        get_satisfied_patterns(explicit, self.pattern_listeners.keys().cloned())
+    pub fn read(&mut self, explicit: Explicit)
+        -> (
+            HashSet<StateLock<S>>,
+            Zip<hash_set::IntoIter<Pattern>, vec::IntoIter<HashSet<StateLock<S>>>>
+        )
+    {
+        let active_patterns = self.pattern_listeners.keys().cloned();
+        let patterns = get_satisfied_patterns(explicit.clone(), active_patterns);
+        let (explicit_states, pattern_states) = self.read_with_patterns(explicit, &patterns);
+        (explicit_states, patterns.into_iter().zip(pattern_states.into_iter()))
     }
 }
 
@@ -390,7 +398,8 @@ mod tests {
 
         let mut automaton = Listeners::<RcRefCellSelector>::new(vec![qs[0].clone()]);
         let mut read_and_check_predecessors = |sym: char, expected: Vec<usize>| {
-            let pre = automaton.read(Explicit::Char(sym), HashSet::new());
+            let patterns = HashSet::new();
+            let pre = automaton.read_with_patterns(Explicit::Char(sym), &patterns);
             let expected2 = (
                 HashSet::from_iter(expected.into_iter().map(|i| qs[i].clone())),
                 vec![],
@@ -469,7 +478,7 @@ mod tests {
                 expected_patterns: Vec<Vec<usize>>,
             | {
             let patterns2 = HashSet::from_iter(patterns.iter().map(|i| pats[*i].clone()));
-            let pre = automaton.read(Explicit::Char(sym), patterns2.clone());
+            let pre = automaton.read_with_patterns(Explicit::Char(sym), &patterns2);
             let expected2 = HashSet::from_iter(expected.into_iter().map(|i| qs[i].clone()));
             assert_eq!(pre.0, expected2);
 
