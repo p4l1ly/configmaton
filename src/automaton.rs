@@ -193,29 +193,23 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
                 if explicit == *sym {
                     // The listener for the transition via `symbol` has already been removed. Let's
                     // register new ones for the transitions of the new right states.
-                    for right_state_lock in right_states.iter() {
+                    'outer: for right_state_lock in right_states.iter() {
                         let right_state = right_state_lock.borrow();
 
                         for (right_sym, _) in right_state.explicit_transitions.iter() {
-                            let right_state_is_new = self.explicit_listeners
+                            if !self.explicit_listeners
                                 .entry(right_sym.clone())
                                 .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone());
-                            if !right_state_is_new {
-                                // all other transitions are certainly already registered too.
-                                break;
-                            }
+                                .insert(right_state_lock.clone())
+                                { continue 'outer; }
                         }
 
                         for (right_sym, _) in right_state.pattern_transitions.iter() {
-                            let right_state_is_new = self.pattern_listeners
+                            if !self.pattern_listeners
                                 .entry(right_sym.clone())
                                 .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone());
-                            if !right_state_is_new {
-                                // all other transitions are certainly already registered too.
-                                break;
-                            }
+                                .insert(right_state_lock.clone())
+                                { continue 'outer; }
                         }
                     }
                 } else {
@@ -233,29 +227,23 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
                 if patterns.contains(pattern) {
                     // The listener for the transition via `symbol` has been already removed. Let's
                     // register new ones for the transitions of the new right states.
-                    for right_state_lock in right_states.iter() {
+                    'outer: for right_state_lock in right_states.iter() {
                         let right_state = right_state_lock.borrow();
 
                         for (right_sym, _) in right_state.explicit_transitions.iter() {
-                            let right_state_is_new = self.explicit_listeners
+                            if !self.explicit_listeners
                                 .entry(right_sym.clone())
                                 .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone());
-                            if !right_state_is_new {
-                                // all other transitions are certainly already registered too.
-                                break;
-                            }
+                                .insert(right_state_lock.clone())
+                                { continue 'outer; }
                         }
 
                         for (right_sym, _) in right_state.pattern_transitions.iter() {
-                            let right_state_is_new = self.pattern_listeners
+                            if !self.pattern_listeners
                                 .entry(right_sym.clone())
                                 .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone());
-                            if !right_state_is_new {
-                                // all other transitions are certainly already registered too.
-                                break;
-                            }
+                                .insert(right_state_lock.clone())
+                                { continue 'outer; }
                         }
                     }
                 } else {
