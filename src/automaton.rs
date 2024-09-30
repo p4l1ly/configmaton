@@ -170,27 +170,25 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
             }
 
             for (pattern, _) in left_state.pattern_transitions.iter() {
-                if !patterns.contains(pattern) {
-                    // Remove listeners for transitions of the left_state (other than the one via
-                    // `pattern` which is already removed). This is different from the explicit
-                    // part because we want to remove the `pattern` key from `pattern_listeners`,
-                    // because `pattern_listeners` are iterated over in `get_satisfied_patterns`.
+                // Remove listeners for transitions of the left_state (other than the one via
+                // `pattern` which is already removed). This is different from the explicit
+                // part because we want to remove the `pattern` key from `pattern_listeners`,
+                // because `pattern_listeners` are iterated over in `get_satisfied_patterns`.
 
-                    match self.pattern_listeners.entry(pattern.clone()) {
-                        Entry::Occupied(mut entry) => {
-                            let is_empty = {
-                                let x = entry.get_mut();
-                                x.remove(left_state_lock);
-                                x.is_empty()
-                            };
-                            if is_empty {
-                                entry.remove();
-                            }
-                        },
-                        Entry::Vacant(_) => {
-                            panic!("Removing unregistered pattern listener.");
+                match self.pattern_listeners.entry(pattern.clone()) {
+                    Entry::Occupied(mut entry) => {
+                        let is_empty = {
+                            let x = entry.get_mut();
+                            x.remove(left_state_lock);
+                            x.is_empty()
+                        };
+                        if is_empty {
+                            entry.remove();
                         }
-                    }
+                    },
+                    // This happens only if the pattern is in `patterns`, because we have just
+                    // cleared its listeners at the beginning of this function.
+                    Entry::Vacant(_) => { }
                 }
             }
         }
