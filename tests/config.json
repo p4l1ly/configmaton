@@ -1,0 +1,23 @@
+[ "fork",
+  [ "match",
+    [
+      [ "foo", "bar" ],
+      [ "qux", "a.*" ]
+    ],
+    [ [ "set", "match1", "passed" ] ]
+  ],
+  [ "match",
+    [ [ "foo", "baz" ] ],
+    [ [ "set", "match2", "passed" ] ],
+    [ "fork",
+      [ "match",
+        [ [ "qux", "a.*" ] ],
+        [ [ "set", "match3", "passed" ] ]
+      ],
+      [ "match",
+        [ [ "qux", "ahoy" ] ],
+        [ [ "set", "match4", "passed" ] ]
+      ]
+    ]
+  ]
+]

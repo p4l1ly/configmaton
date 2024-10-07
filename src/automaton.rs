@@ -5,21 +5,23 @@ use serde_json::Number;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Explicit {
-    Key,
-    Value(String),
-    End,
-    Char(char),
-    Num(Number),
-    Bool(bool),
+    OldVar(String),
+    NewVar(String),
+    EndVar,
     Null,
-    ListF,
-    DictF,
+    Bool(bool),
+    Num(Number),
+    ListStart,
+    DictStart,
+    StringStart,
+    Char(char),
+    End,
+    Void,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Pattern {
     Not(Explicit),
-    Any,
     CharRange(char, char),
     NumCondition(NumCondition),
 }
@@ -280,9 +282,6 @@ pub fn get_satisfied_patterns<I: Iterator<Item=Pattern>>(explicit: Explicit, pat
                     result.insert(pattern.clone());
                 }
             },
-            Pattern::Any => {
-                result.insert(pattern.clone());
-            },
             Pattern::CharRange(from, to) => {
                 if let Explicit::Char(c) = explicit {
                     if c >= from && c <= to {
@@ -403,7 +402,7 @@ mod tests {
         };
 
         let pats = [
-            Pattern::Any,
+            Pattern::Not(Explicit::Void),
             Pattern::Not(Explicit::Char('b')),
         ];
         let any = 0;
@@ -516,7 +515,7 @@ mod tests {
     #[test]
     fn get_satisfied_patterns_works() {
         let pats = [
-            Pattern::Any,
+            Pattern::Not(Explicit::Void),
             Pattern::Not(Explicit::Char('b')),
             Pattern::CharRange('b', 'd'),
             Pattern::NumCondition(NumCondition::NotIn(Number::from(1), Number::from(4))),
