@@ -1,104 +1,122 @@
-use std::{collections::{HashMap, HashSet, hash_map::Entry, hash_set}, hash::Hash, vec, iter::Zip};
+use std::{collections::{hash_map::Entry, hash_set, HashMap, HashSet}, hash::Hash, iter::Zip, mem::MaybeUninit, vec};
+use std::ptr::addr_of_mut;
 
 use crate::lock::{LockSelector, Lock};
-use serde_json::Number;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Explicit {
     OldVar(String),
     NewVar(String),
     EndVar,
-    Null,
-    Bool(bool),
-    Num(Number),
-    ListStart,
-    DictStart,
-    StringStart,
-    Char(char),
-    End,
-    Void,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Pattern {
-    Not(Explicit),
-    CharRange(char, char),
-    NumCondition(NumCondition),
+    Char(u8),
 }
 
 type StateLock<S> = <S as LockSelector>::Lock<State<S>>;
+type TransLock<S> = <S as LockSelector>::Lock<Trans<S>>;
+type Pattern = (u8, u8);
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum NumCondition {
-    Less(Number),
-    LessEq(Number),
-    Eq(Number),
-    Greater(Number),
-    GreaterEq(Number),
-    NotEq(Number),
-    In(Number, Number),
-    NotIn(Number, Number),
-}
-
-impl NumCondition {
-    pub fn is_satisfied_by(&self, num: Number) -> bool {
-        match self {
-            NumCondition::Less(ref n) => compare_numbers(&num, n, |a, b| a < b),
-            NumCondition::LessEq(ref n) => compare_numbers(&num, n, |a, b| a <= b),
-            NumCondition::Eq(ref n) => compare_numbers(&num, n, |a, b| a == b),
-            NumCondition::Greater(ref n) => compare_numbers(&num, n, |a, b| a > b),
-            NumCondition::GreaterEq(ref n) => compare_numbers(&num, n, |a, b| a >= b),
-            NumCondition::NotEq(ref n) => compare_numbers(&num, n, |a, b| a != b),
-            NumCondition::In(ref low, ref high) => {
-                compare_numbers(&num, low, |a, b| a >= b)
-                    && compare_numbers(&num, high, |a, b| a <= b)
-            },
-            NumCondition::NotIn(ref low, ref high) => {
-                !(compare_numbers(&num, low, |a, b| a >= b)
-                    && compare_numbers(&num, high, |a, b| a <= b))
-            }
-        }
-    }
-}
-
-fn compare_numbers(num1: &Number, num2: &Number, cmp: impl Fn(f64, f64) -> bool) -> bool {
-    let n1 = num1.as_f64().expect("First number should be convertible to f64");
-    let n2 = num2.as_f64().expect("Second number should be convertible to f64");
-    cmp(n1, n2)
+pub struct Trans<S: LockSelector> {
+    pub states: Box<[StateLock<S>]>,
 }
 
 pub struct State<S: LockSelector> {
     // This is very like in the traditional finite automata. Each state has a set of transitions
     // via symbols to other states. If multiple states are parallel (let's say nondeterministic)
     // successors of a state via the same symbol, they are stored in a single vector.
-    pub explicit_transitions: Box<[(Explicit, Box<[StateLock<S>]>)]>,
-    pub pattern_transitions: Box<[(Pattern, Box<[StateLock<S>]>)]>,
+    pub explicit_transitions: Box<[(Explicit, TransLock<S>)]>,
+    pub pattern_transitions: Box<[(Pattern, TransLock<S>)]>,
+}
+
+pub struct ExplicitListeners<S: LockSelector> {
+    old_vars: HashMap<String, HashSet<StateLock<S>>>,
+    new_vars: HashMap<String, HashSet<StateLock<S>>>,
+    end_var: HashSet<StateLock<S>>,
+    chars: [HashSet<StateLock<S>>; 256],
+}
+
+impl<S: LockSelector> ExplicitListeners<S>
+where StateLock<S>: Hash + Eq + std::fmt::Debug,
+{
+    pub fn new() -> Self {
+        ExplicitListeners {
+            old_vars: HashMap::new(),
+            new_vars: HashMap::new(),
+            end_var: HashSet::new(),
+            chars: unsafe {
+                let mut chars = MaybeUninit::uninit();
+                let pchars: *mut [HashSet<StateLock<S>>; 256] = chars.as_mut_ptr();
+                for i in 0..256 {
+                    addr_of_mut!((*pchars)[i]).write(HashSet::new());
+                }
+                chars.assume_init()
+            },
+        }
+    }
+
+    pub fn add(&mut self, sym: Explicit, state: StateLock<S>) {
+        match sym {
+            Explicit::OldVar(s) => {
+                self.old_vars.entry(s).or_insert_with(HashSet::new).insert(state);
+            },
+            Explicit::NewVar(s) => {
+                self.new_vars.entry(s).or_insert_with(HashSet::new).insert(state);
+            },
+            Explicit::EndVar => {
+                self.end_var.insert(state);
+            },
+            Explicit::Char(c) => {
+                self.chars[c as usize].insert(state);
+            },
+        }
+    }
+
+    pub fn get_mut(&mut self, sym: &Explicit) -> &mut HashSet<StateLock<S>> {
+        match sym {
+            Explicit::OldVar(s) => {
+                self.old_vars.entry(s.clone()).or_insert_with(HashSet::new)
+            },
+            Explicit::NewVar(s) => {
+                self.new_vars.entry(s.clone()).or_insert_with(HashSet::new)
+            }
+            Explicit::EndVar => &mut self.end_var,
+            Explicit::Char(c) => &mut self.chars[*c as usize],
+        }
+    }
+}
+
+impl<S: LockSelector> std::fmt::Debug for ExplicitListeners<S>
+where StateLock<S>: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExplicitListeners")
+            .field("old_vars", &self.old_vars)
+            .field("new_vars", &self.new_vars)
+            .field("end_var", &self.end_var)
+            .field("chars", &self.chars)
+            .finish()
+    }
 }
 
 pub struct Listeners<S: LockSelector> {
     // Mapping from symbols to such current states from which a transition via the symbol exists.
-    pub explicit_listeners: HashMap<Explicit, HashSet<StateLock<S>>>,
+    pub explicit_listeners: ExplicitListeners<S>,
     pub pattern_listeners: HashMap<Pattern, HashSet<StateLock<S>>>,
 }
 
-impl<S: LockSelector>
-Listeners<S>
-where StateLock<S>: Hash + Eq + std::fmt::Debug,
+impl<S: LockSelector> Listeners<S>
+where
+    StateLock<S>: Hash + Eq + std::fmt::Debug,
+    TransLock<S>: Hash + Eq + std::fmt::Debug,
 {
     // Initialize the state of the automaton.
-    pub fn new<I>(initial_states: I) -> Self
-    where
-        I: IntoIterator<Item = StateLock<S>>,
+    pub fn new<I: IntoIterator<Item = StateLock<S>>>(initial_states: I) -> Self
     {
-        let mut explicit_listeners = HashMap::new();
+        let mut explicit_listeners = ExplicitListeners::new();
         let mut pattern_listeners = HashMap::new();
         for state_lock in initial_states.into_iter() {
             let state = state_lock.borrow();
             for (symbol, _) in state.explicit_transitions.iter() {
-                explicit_listeners
-                    .entry(symbol.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(state_lock.clone());
+                explicit_listeners.add(symbol.clone(), state_lock.clone());
             }
 
             for (pattern, _) in state.pattern_transitions.iter() {
@@ -126,10 +144,9 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
         let mut pattern_old_statess: Vec<HashSet<StateLock<S>>> = Vec::with_capacity(patterns.len());
         let mut any_pattern = false;
 
-        if let Some(states) = self.explicit_listeners.get_mut(&explicit) {
-            if !states.is_empty() {
-                std::mem::swap(&mut explicit_old_states, states);
-            }
+        let states = self.explicit_listeners.get_mut(&explicit);
+        if !states.is_empty() {
+            std::mem::swap(&mut explicit_old_states, states);
         }
 
         for pattern in patterns.iter() {
@@ -167,7 +184,7 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
                 if explicit != *sym {
                     // Remove listeners for transitions of the left_state (other than the one via
                     // `symbol` which is already removed).
-                    self.explicit_listeners.get_mut(&sym).unwrap().remove(left_state_lock);
+                    self.explicit_listeners.get_mut(&sym).remove(left_state_lock);
                 }
             }
 
@@ -196,31 +213,13 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
         }
 
         // Then, let's register new listeners for transitions of the successors.
+        let mut trans = HashSet::new();
+
         for left_state_lock in all_old_states.iter() {
             let left_state = left_state_lock.borrow();
             for (sym, right_states) in left_state.explicit_transitions.iter() {
                 if explicit == *sym {
-                    // The listener for the transition via `symbol` has already been removed. Let's
-                    // register new ones for the transitions of the new right states.
-                    'outer: for right_state_lock in right_states.iter() {
-                        let right_state = right_state_lock.borrow();
-
-                        for (right_sym, _) in right_state.explicit_transitions.iter() {
-                            if !self.explicit_listeners
-                                .entry(right_sym.clone())
-                                .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone())
-                                { continue 'outer; }
-                        }
-
-                        for (right_sym, _) in right_state.pattern_transitions.iter() {
-                            if !self.pattern_listeners
-                                .entry(right_sym.clone())
-                                .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone())
-                                { continue 'outer; }
-                        }
-                    }
+                    trans.insert(right_states.clone());
                 }
             }
 
@@ -230,27 +229,29 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
 
             for (pattern, right_states) in left_state.pattern_transitions.iter() {
                 if patterns.contains(pattern) {
-                    // The listener for the transition via `symbol` has been already removed. Let's
-                    // register new ones for the transitions of the new right states.
-                    'outer: for right_state_lock in right_states.iter() {
-                        let right_state = right_state_lock.borrow();
+                    trans.insert(right_states.clone());
+                }
+            }
+        }
 
-                        for (right_sym, _) in right_state.explicit_transitions.iter() {
-                            if !self.explicit_listeners
-                                .entry(right_sym.clone())
-                                .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone())
-                                { continue 'outer; }
-                        }
+        for t in trans {
+            let right_states = t.borrow();
+            'outer: for right_state_lock in right_states.states.iter() {
+                let right_state = right_state_lock.borrow();
 
-                        for (right_sym, _) in right_state.pattern_transitions.iter() {
-                            if !self.pattern_listeners
-                                .entry(right_sym.clone())
-                                .or_insert_with(HashSet::new)
-                                .insert(right_state_lock.clone())
-                                { continue 'outer; }
-                        }
-                    }
+                for (right_sym, _) in right_state.explicit_transitions.iter() {
+                    if !self.explicit_listeners
+                        .get_mut(&right_sym)
+                        .insert(right_state_lock.clone())
+                        { continue 'outer; }
+                }
+
+                for (right_sym, _) in right_state.pattern_transitions.iter() {
+                    if !self.pattern_listeners
+                        .entry(right_sym.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert(right_state_lock.clone())
+                        { continue 'outer; }
                 }
             }
         }
@@ -275,27 +276,11 @@ pub fn get_satisfied_patterns<I: Iterator<Item=Pattern>>(explicit: Explicit, pat
     -> HashSet<Pattern>
 {
     let mut result = HashSet::new();
-    for pattern in patterns {
-        match pattern.clone() {
-            Pattern::Not(sym) => {
-                if explicit != sym {
-                    result.insert(pattern.clone());
-                }
-            },
-            Pattern::CharRange(from, to) => {
-                if let Explicit::Char(c) = explicit {
-                    if c >= from && c <= to {
-                        result.insert(pattern.clone());
-                    }
-                }
-            },
-            Pattern::NumCondition(num_cond) => {
-                if let Explicit::Num(num) = explicit.clone() {
-                    if num_cond.is_satisfied_by(num) {
-                        result.insert(pattern.clone());
-                    }
-                }
-            },
+    for (from, to) in patterns {
+        if let Explicit::Char(c) = explicit {
+            if c >= from && c <= to {
+                result.insert((from, to));
+            }
         }
     }
     result
@@ -306,7 +291,10 @@ mod tests {
     use super::*;
     use crate::lock::{RcRefCellSelector, RcRefCell};
 
-    fn new_state() -> RcRefCell<State<RcRefCellSelector>> {
+    type RcState = RcRefCell<State<RcRefCellSelector>>;
+    type RcTrans = RcRefCell<Trans<RcRefCellSelector>>;
+
+    fn new_state() -> RcState {
         let result = RcRefCell::new(State {
             explicit_transitions: Box::new([]),
             pattern_transitions: Box::new([]),
@@ -315,45 +303,52 @@ mod tests {
         result
     }
 
+    fn new_trans(states: Vec<RcState>) -> RcRefCell<Trans<RcRefCellSelector>> {
+        RcRefCell::new(Trans{states: states.into_boxed_slice()})
+    }
+
     fn set_explicit(
-        state: &RcRefCell<State<RcRefCellSelector>>,
-        transitions: Vec<(Explicit, Vec<RcRefCell<State<RcRefCellSelector>>>)>,
+        state: &RcState,
+        transitions: Vec<(Explicit, &RcTrans)>,
     ) {
         state.borrow_mut().explicit_transitions =
-            transitions.into_iter().map(|(sym, states)|
-                (sym, states.into_boxed_slice())).collect::<Vec<_>>().into_boxed_slice();
+            transitions.into_iter().map(|(sym, trans)| {
+                (sym, trans.clone())
+            }).collect::<Vec<_>>().into_boxed_slice();
     }
 
     fn set_pattern(
-        state: &RcRefCell<State<RcRefCellSelector>>,
-        transitions: Vec<(Pattern, Vec<RcRefCell<State<RcRefCellSelector>>>)>,
+        state: &RcState,
+        transitions: Vec<(Pattern, &RcTrans)>,
     ) {
         state.borrow_mut().pattern_transitions =
-            transitions.into_iter().map(|(sym, states)|
-                (sym, states.into_boxed_slice())).collect::<Vec<_>>().into_boxed_slice();
+            transitions.into_iter().map(|(sym, trans)| {
+                (sym, trans.clone())
+            }).collect::<Vec<_>>().into_boxed_slice();
     }
 
     #[test]
     fn explicit_works() {
         let qs = vec![new_state(), new_state(), new_state(), new_state()];
+        let ts = vec![vec![1], vec![2], vec![0, 3], vec![0]].into_iter().map(|states|
+            new_trans(states.into_iter().map(|i| qs[i].clone()).collect::<Vec<_>>())
+        ).collect::<Vec<_>>();
+        let (t1, t2, t03, t0) = (0, 1, 2, 3);
+        let (a, b, c) = (0, 1, 2);
 
-        let my_set_explicit = |state_ix: usize, transitions: Vec<(char, Vec<usize>)>| {
-            set_explicit(&qs[state_ix], transitions.into_iter().map(|(sym, states)|
-                (
-                    Explicit::Char(sym),
-                    states.into_iter().map(
-                        |i| qs[i].clone()).collect::<Vec<_>>()
-                )
+        let my_set_explicit = |state_ix: usize, transitions: Vec<(u8, usize)>| {
+            set_explicit(&qs[state_ix], transitions.into_iter().map(|(sym, trans_ix)|
+                (Explicit::Char(sym), &ts[trans_ix])
             ).collect::<Vec<_>>());
         };
 
-        my_set_explicit(0, vec![('a', vec![1])]);
-        my_set_explicit(1, vec![('b', vec![2])]);
-        my_set_explicit(2, vec![('c', vec![0, 3])]);
-        my_set_explicit(3, vec![('b', vec![0])]);
+        my_set_explicit(0, vec![(a, t1)]);
+        my_set_explicit(1, vec![(b, t2)]);
+        my_set_explicit(2, vec![(c, t03)]);
+        my_set_explicit(3, vec![(b, t0)]);
 
         let mut automaton = Listeners::<RcRefCellSelector>::new(vec![qs[0].clone()]);
-        let mut read_and_check_predecessors = |sym: char, expected: Vec<usize>| {
+        let mut read_and_check_predecessors = |sym: u8, expected: Vec<usize>| {
             let patterns = HashSet::new();
             let pre = automaton.read_with_patterns(Explicit::Char(sym), &patterns);
             let expected2 = (
@@ -364,71 +359,68 @@ mod tests {
         };
 
         // 0--- 0--a-->1
-        read_and_check_predecessors('a', vec![0]);
+        read_and_check_predecessors(a, vec![0]);
         // -1-- 1--b-->2
-        read_and_check_predecessors('b', vec![1]);
+        read_and_check_predecessors(b, vec![1]);
         // --2-
-        read_and_check_predecessors('b', vec![]);
+        read_and_check_predecessors(b, vec![]);
         // --2-
-        read_and_check_predecessors('a', vec![]);
+        read_and_check_predecessors(a, vec![]);
         // --2- 2--c-->0 2--c-->3
-        read_and_check_predecessors('c', vec![2]);
+        read_and_check_predecessors(c, vec![2]);
         // 0--3 0--a-->1
-        read_and_check_predecessors('a', vec![0]);
+        read_and_check_predecessors(a, vec![0]);
         // -1-3 1--b-->2 3--b-->0
-        read_and_check_predecessors('b', vec![1, 3]);
+        read_and_check_predecessors(b, vec![1, 3]);
         // 0-2- 2--c-->3
-        read_and_check_predecessors('c', vec![2]);
+        read_and_check_predecessors(c, vec![2]);
         // 0--3 3--b-->0
-        read_and_check_predecessors('b', vec![3]);
+        read_and_check_predecessors(b, vec![3]);
         // 0--- 0--a-->1
-        read_and_check_predecessors('a', vec![0]);
+        read_and_check_predecessors(a, vec![0]);
         // -1-- 1--b-->2
-        read_and_check_predecessors('b', vec![1]);
+        read_and_check_predecessors(b, vec![1]);
     }
 
     #[test]
     fn pattern_works() {
         let qs = vec![new_state(), new_state(), new_state(), new_state()];
+        let ts = vec![vec![1], vec![2], vec![0, 3], vec![0], vec![3]].into_iter().map(|states|
+            new_trans(states.into_iter().map(|i| qs[i].clone()).collect::<Vec<_>>())
+        ).collect::<Vec<_>>();
+        let (t1, t2, t03, t0, t3) = (0, 1, 2, 3, 4);
+        let (a, b, c) = (0, 1, 2);
 
-        let my_set_explicit = |state_ix: usize, transitions: Vec<(char, Vec<usize>)>| {
-            set_explicit(&qs[state_ix], transitions.into_iter().map(|(sym, states)|
-                (
-                    Explicit::Char(sym),
-                    states.into_iter().map(
-                        |i| qs[i].clone()).collect::<Vec<_>>()
-                )
+        let my_set_explicit = |state_ix: usize, transitions: Vec<(u8, usize)>| {
+            set_explicit(&qs[state_ix], transitions.into_iter().map(|(sym, trans_ix)|
+                (Explicit::Char(sym), &ts[trans_ix])
             ).collect::<Vec<_>>());
         };
 
         let pats = [
-            Pattern::Not(Explicit::Void),
-            Pattern::Not(Explicit::Char('b')),
+            (0, 255),
+            (0, 0),  // Singleton patterns should not appear in production.
+            (2, 255),
         ];
-        let any = 0;
-        let nb = 1;
+        let (any, lb, gb) = (0, 1, 2);
 
-        let my_set_pattern = |state_ix: usize, transitions: Vec<(usize, Vec<usize>)>| {
-            set_pattern(&qs[state_ix], transitions.into_iter().map(|(sym, states)|
-                (
-                    pats[sym].clone(),
-                    states.into_iter().map(
-                        |i| qs[i].clone()).collect::<Vec<_>>()
-                )
+        let my_set_pattern = |state_ix: usize, transitions: Vec<(usize, usize)>| {
+            set_pattern(&qs[state_ix], transitions.into_iter().map(|(sym, trans_ix)|
+                (pats[sym].clone(), &ts[trans_ix])
             ).collect::<Vec<_>>());
         };
 
-        my_set_explicit(0, vec![('a', vec![1])]);
-        my_set_explicit(1, vec![('b', vec![2])]);
-        my_set_explicit(2, vec![('c', vec![0, 3])]);
-        my_set_explicit(3, vec![('b', vec![0])]);
-        my_set_pattern(0, vec![(any, vec![3])]);
-        my_set_pattern(3, vec![(nb, vec![3])]);
+        my_set_explicit(0, vec![(a, t1)]);
+        my_set_explicit(1, vec![(b, t2)]);
+        my_set_explicit(2, vec![(c, t03)]);
+        my_set_explicit(3, vec![(b, t0)]);
+        my_set_pattern(0, vec![(any, t3)]);
+        my_set_pattern(3, vec![(lb, t3), (gb, t3)]);
 
         let mut automaton = Listeners::<RcRefCellSelector>::new(vec![qs[0].clone()]);
         let mut read_and_check_predecessors =
             |
-                sym: char,
+                sym: u8,
                 patterns: Vec<usize>,
                 expected: Vec<usize>,
                 expected_patterns: Vec<Vec<usize>>,
@@ -448,32 +440,32 @@ mod tests {
         };
 
         // 0--- 0--a-->1 0-any->3
-        read_and_check_predecessors('a', vec![any], vec![0], vec![vec![0]]);
+        read_and_check_predecessors(a, vec![any], vec![0], vec![vec![0]]);
         // -1-3 1--b-->2 3--b-->0
-        read_and_check_predecessors('b', vec![], vec![1, 3], vec![]);
+        read_and_check_predecessors(b, vec![], vec![1, 3], vec![]);
         // 0-2- 0-any->3
-        read_and_check_predecessors('b', vec![any], vec![], vec![vec![0]]);
-        // --23 3--nb->0
-        read_and_check_predecessors('a', vec![nb], vec![], vec![vec![3]]);
-        // -123 2--c-->0 2--c-->3 3--nb->3
-        read_and_check_predecessors('c', vec![nb], vec![2], vec![vec![3]]);
-        // 01-3 0--c-->1 0-any->3 3--nb->3
-        read_and_check_predecessors('a', vec![any, nb], vec![0], vec![vec![0], vec![3]]);
+        read_and_check_predecessors(b, vec![any], vec![], vec![vec![0]]);
+        // --23 3--lb->0
+        read_and_check_predecessors(a, vec![lb], vec![], vec![vec![3]]);
+        // -123 2--c-->0 2--c-->3 3--gb->3
+        read_and_check_predecessors(c, vec![gb], vec![2], vec![vec![3]]);
+        // 01-3 0--a-->1 0-any->3 3--lb->3
+        read_and_check_predecessors(a, vec![any, lb], vec![0], vec![vec![0], vec![3]]);
         // -1-3 1--b-->2 3--b-->0
-        read_and_check_predecessors('b', vec![], vec![1, 3], vec![]);
+        read_and_check_predecessors(b, vec![], vec![1, 3], vec![]);
         // 0-2- 0-any->3 2--c-->3
-        read_and_check_predecessors('c', vec![any], vec![2], vec![vec![0]]);
+        read_and_check_predecessors(c, vec![any], vec![2], vec![vec![0]]);
         // 0--3 0-any->3 3--b-->0
-        read_and_check_predecessors('b', vec![any], vec![3], vec![vec![0]]);
+        read_and_check_predecessors(b, vec![any], vec![3], vec![vec![0]]);
         // 0--3 0--a-->1 0-any->3 3--nb->3
-        read_and_check_predecessors('a', vec![any, nb], vec![0], vec![vec![0], vec![3]]);
+        read_and_check_predecessors(a, vec![any, lb], vec![0], vec![vec![0], vec![3]]);
         // -1-3 1--b-->2 3--b-->0
-        read_and_check_predecessors('b', vec![], vec![1, 3], vec![]);
+        read_and_check_predecessors(b, vec![], vec![1, 3], vec![]);
 
         let mut automaton = Listeners::<RcRefCellSelector>::new(vec![qs[0].clone()]);
         let mut read_and_check_predecessors =
             |
-                sym: char,
+                sym: u8,
                 expected: Vec<usize>,
                 expected_patterns: Vec<(usize, Vec<usize>)>,
             | {
@@ -489,41 +481,42 @@ mod tests {
         };
 
         // 0--- 0--a-->1 0-any->3
-        read_and_check_predecessors('a', vec![0], vec![(any, vec![0])]);
+        read_and_check_predecessors(a, vec![0], vec![(any, vec![0])]);
         // -1-3 1--b-->2 3--b-->0
-        read_and_check_predecessors('b', vec![1, 3], vec![]);
+        read_and_check_predecessors(b, vec![1, 3], vec![]);
         // 0-2- 0-any->3
-        read_and_check_predecessors('b', vec![], vec![(any, vec![0])]);
+        read_and_check_predecessors(b, vec![], vec![(any, vec![0])]);
         // --23 3--nb->0
-        read_and_check_predecessors('a', vec![], vec![(nb, vec![3])]);
+        read_and_check_predecessors(a, vec![], vec![(lb, vec![3])]);
         // -123 2--c-->0 2--c-->3 3--nb->3
-        read_and_check_predecessors('c', vec![2], vec![(nb, vec![3])]);
+        read_and_check_predecessors(c, vec![2], vec![(gb, vec![3])]);
         // 01-3 0--c-->1 0-any->3 3--nb->3
-        read_and_check_predecessors('a', vec![0], vec![(any, vec![0]), (nb, vec![3])]);
+        read_and_check_predecessors(a, vec![0], vec![(any, vec![0]), (lb, vec![3])]);
         // -1-3 1--b-->2 3--b-->0
-        read_and_check_predecessors('b', vec![1, 3], vec![]);
+        read_and_check_predecessors(b, vec![1, 3], vec![]);
         // 0-2- 0-any->3 2--c-->3
-        read_and_check_predecessors('c', vec![2], vec![(any, vec![0])]);
+        read_and_check_predecessors(c, vec![2], vec![(any, vec![0])]);
         // 0--3 0-any->3 3--b-->0
-        read_and_check_predecessors('b', vec![3], vec![(any, vec![0])]);
+        read_and_check_predecessors(b, vec![3], vec![(any, vec![0])]);
         // 0--3 0--a-->1 0-any->3 3--nb->3
-        read_and_check_predecessors('a', vec![0], vec![(any, vec![0]), (nb, vec![3])]);
+        read_and_check_predecessors(a, vec![0], vec![(any, vec![0]), (lb, vec![3])]);
         // -1-3 1--b-->2 3--b-->0
-        read_and_check_predecessors('b', vec![1, 3], vec![]);
+        read_and_check_predecessors(b, vec![1, 3], vec![]);
     }
 
     #[test]
     fn get_satisfied_patterns_works() {
+        let (a, b) = (0, 1);
         let pats = [
-            Pattern::Not(Explicit::Void),
-            Pattern::Not(Explicit::Char('b')),
-            Pattern::CharRange('b', 'd'),
-            Pattern::NumCondition(NumCondition::NotIn(Number::from(1), Number::from(4))),
+            (0, 255),
+            (0, 0),
+            (2, 255),
+            (1, 3),
         ];
         let any = 0;
-        let nb = 1;
-        let range = 2;
-        let num = 3;
+        let lb = 1;
+        let gb = 2;
+        let range = 3;
 
         let check_char = |sym: Explicit, patterns: Vec<usize>, expected: Vec<usize>| {
             let patterns2 = patterns.iter().map(|i| pats[*i].clone()).collect::<HashSet<_>>();
@@ -532,15 +525,10 @@ mod tests {
             assert_eq!(result, expected2);
         };
 
-        check_char(Explicit::Char('a'), vec![any], vec![any]);
-        check_char(Explicit::Char('b'), vec![any, nb], vec![any]);
-        check_char(Explicit::Char('a'), vec![any, nb], vec![any, nb]);
-        check_char(Explicit::Char('a'), vec![nb], vec![nb]);
-        check_char(Explicit::Char('b'), vec![nb, range, num], vec![range]);
-        check_char(Explicit::Num(Number::from(5)), vec![any, nb, range, num], vec![any, nb, num]);
-        check_char(Explicit::Num(Number::from(3)), vec![range, num], vec![]);
-        check_char(Explicit::Num(Number::from(4)), vec![range, num], vec![]);
-        check_char(Explicit::Num(Number::from(0)), vec![range, num], vec![num]);
-        check_char(Explicit::Num(Number::from(1)), vec![range, num], vec![]);
+        check_char(Explicit::Char(a), vec![any], vec![any]);
+        check_char(Explicit::Char(b), vec![any, lb, gb], vec![any]);
+        check_char(Explicit::Char(a), vec![any, lb, gb], vec![any, lb]);
+        check_char(Explicit::Char(a), vec![lb, gb], vec![lb]);
+        check_char(Explicit::Char(b), vec![lb, gb, range], vec![range]);
     }
 }
