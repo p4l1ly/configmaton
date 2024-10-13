@@ -2,6 +2,7 @@ use std::{collections::{hash_map::Entry, hash_set, HashMap, HashSet}, hash::Hash
 use std::ptr::addr_of_mut;
 
 use crate::lock::{LockSelector, Lock};
+use crate::config_parser::guards::Guard;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Explicit {
@@ -13,7 +14,7 @@ pub enum Explicit {
 
 type StateLock<S> = <S as LockSelector>::Lock<State<S>>;
 type TransLock<S> = <S as LockSelector>::Lock<Trans<S>>;
-pub type Pattern = (u8, u8);
+pub type Pattern = Guard;
 
 pub struct Trans<S: LockSelector> {
     pub states: Box<[StateLock<S>]>,
@@ -276,10 +277,10 @@ pub fn get_satisfied_patterns<I: Iterator<Item=Pattern>>(explicit: Explicit, pat
     -> HashSet<Pattern>
 {
     let mut result = HashSet::new();
-    for (from, to) in patterns {
+    for guard in patterns {
         if let Explicit::Char(c) = explicit {
-            if c >= from && c <= to {
-                result.insert((from, to));
+            if guard.contains(c) {
+                result.insert(guard);
             }
         }
     }
@@ -398,9 +399,9 @@ mod tests {
         };
 
         let pats = [
-            (0, 255),
-            (0, 0),  // Singleton patterns should not appear in production.
-            (2, 255),
+            Guard::from_ranges(vec![(0, 255)]),
+            Guard::from_ranges(vec![(0, 0)]),  // Singleton patterns should not appear in production.
+            Guard::from_ranges(vec![(2, 255)]),
         ];
         let (any, lb, gb) = (0, 1, 2);
 
@@ -508,10 +509,10 @@ mod tests {
     fn get_satisfied_patterns_works() {
         let (a, b) = (0, 1);
         let pats = [
-            (0, 255),
-            (0, 0),
-            (2, 255),
-            (1, 3),
+            Guard::from_ranges(vec![(0, 255)]),
+            Guard::from_ranges(vec![(0, 0)]),
+            Guard::from_ranges(vec![(2, 255)]),
+            Guard::from_ranges(vec![(1, 3)]),
         ];
         let any = 0;
         let lb = 1;

@@ -2,10 +2,10 @@ use serde_json;
 use serde_json::Value;
 use crate::automaton::{Explicit, Pattern};
 
-mod dfa;
-mod guards;
-mod ast;
-mod nfa;
+pub mod dfa;
+pub mod guards;
+pub mod ast;
+pub mod nfa;
 
 use ast::Ast;
 

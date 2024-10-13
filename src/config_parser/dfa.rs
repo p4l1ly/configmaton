@@ -56,20 +56,13 @@ impl Dfa {
             //    cyclically.
             let mut suc_to_guard: HashMap<usize, Guard> = HashMap::new();
             for (range, suc) in transitions {
-                match suc_to_guard.entry(suc) {
-                    Entry::Vacant(entry) => { entry.insert(vec![range]); },
-                    Entry::Occupied(mut entry) => {
-                        let guard = entry.get_mut();
-                        *guard = guards::add_range(std::mem::take(guard), range);
-                    },
-                }
+                suc_to_guard.entry(suc).or_insert(Guard::empty()).add_range(range);
             }
 
             let mut cfgsuc_to_guard: HashMap<Cfg, Guard> = HashMap::new();
             for (suc, guard) in suc_to_guard {
                 let cfgsuc = nfa.expand_config(vec![suc]);
-                let old = cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::new());
-                *old = guards::union(old, &guard);
+                cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::empty()).union_update(&guard);
             }
 
             let mut len_before = cfgsuc_to_guard.len();
@@ -80,8 +73,7 @@ impl Dfa {
                 }
 
                 for (guard, cfgsuc) in guard_to_cfgsuc.drain() {
-                    let old = cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::new());
-                    *old = guards::union(old, &guard);
+                    cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::empty()).union_update(&guard);
                 }
 
                 if cfgsuc_to_guard.len() == len_before {
@@ -91,7 +83,7 @@ impl Dfa {
             }
 
             // 2. mintermize
-            guard_to_cfgsuc = guards::mintermize(cfgsuc_to_guard.drain());
+            guard_to_cfgsuc = guards::Guard::mintermize(cfgsuc_to_guard.drain());
 
             // 3. join ranges that lead to the same state and states with the same ranges,
             //   cyclically.
@@ -99,8 +91,7 @@ impl Dfa {
             len_before = guard_to_cfgsuc.len();
             loop {
                 for (guard, cfgsuc) in guard_to_cfgsuc.drain() {
-                    let old = cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::new());
-                    *old = guards::union(old, &guard);
+                    cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::empty()).union_update(&guard);
                 }
 
                 for (cfgsuc, guard) in cfgsuc_to_guard.drain() {
@@ -151,25 +142,25 @@ mod tests {
         }
 
         assert_eq!(dfa.states[0].transitions.len(), 2);
-        assert_eq!(dfa.states[0].transitions[0].0, vec![(0, b'a' - 1), (b'a' + 1, 255)]);
-        assert_eq!(dfa.states[0].transitions[1].0, vec![(b'a', b'a')]);
+        assert_eq!(dfa.states[0].transitions[0].0, Guard::from_ranges(vec![(b'a', b'a')]));
+        assert_eq!(dfa.states[0].transitions[1].0, Guard::from_ranges(vec![(0, b'a' - 1), (b'a' + 1, 255)]));
 
-        let qsink = dfa.states[0].transitions[0].1;
-        let q2 = dfa.states[0].transitions[1].1;
+        let qsink = dfa.states[0].transitions[1].1;
+        let q2 = dfa.states[0].transitions[0].1;
 
         assert_eq!(dfa.states[qsink].is_final, false);
-        assert_eq!(dfa.states[qsink].transitions, vec![(vec![(0, 255)], qsink)]);
+        assert_eq!(dfa.states[qsink].transitions, vec![(Guard::full(), qsink)]);
 
         assert_eq!(dfa.states[q2].is_final, false);
         assert_eq!(dfa.states[q2].transitions.len(), 3);
-        assert_eq!(dfa.states[q2].transitions[1], (vec![(b'A', b'D'), (b'b', b'c')], q2));
-        assert_eq!(dfa.states[q2].transitions[0],
-            (vec![(0, b'A' - 1), (b'D' + 1, b'b' - 1), (b'd' + 1, 255)], qsink));
-        assert_eq!(dfa.states[q2].transitions[2].0, vec![(b'd', b'd')]);
+        assert_eq!(dfa.states[q2].transitions[0], (Guard::from_ranges(vec![(b'A', b'D'), (b'b', b'c')]), q2));
+        assert_eq!(dfa.states[q2].transitions[1].0, Guard::from_ranges(vec![(b'd', b'd')]));
+        assert_eq!(dfa.states[q2].transitions[2],
+            (Guard::from_ranges(vec![(0, b'A' - 1), (b'D' + 1, b'b' - 1), (b'd' + 1, 255)]), qsink));
 
-        let qf = dfa.states[q2].transitions[2].1;
+        let qf = dfa.states[q2].transitions[1].1;
         assert_eq!(dfa.states[qf].is_final, true);
-        assert_eq!(dfa.states[qf].transitions, vec![(vec![(0, 255)], qsink)]);
+        assert_eq!(dfa.states[qf].transitions, vec![(Guard::full(), qsink)]);
     }
 
     #[test]
@@ -179,9 +170,9 @@ mod tests {
 
         assert_eq!(dfa.states.len(), 2);
         assert_eq!(dfa.states[0].is_final, true);
-        assert_eq!(dfa.states[0].transitions, vec![(vec![(0, 255)], 1)]);
+        assert_eq!(dfa.states[0].transitions, vec![(Guard::full(), 1)]);
 
         assert_eq!(dfa.states[1].is_final, false);
-        assert_eq!(dfa.states[1].transitions, vec![(vec![(0, 255)], 1)]);
+        assert_eq!(dfa.states[1].transitions, vec![(Guard::full(), 1)]);
     }
 }
