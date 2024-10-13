@@ -16,15 +16,22 @@ pub enum Explicit {
 type StateLock<S> = <S as LockSelector>::Lock<State<S>>;
 pub type Pattern = Guard;
 
+// There will be always at least one successor and mostly only one. Therefore we store the first
+// successor specially, to avoid indirection.
+pub struct Succ<S: LockSelector>(StateLock<S>, Box<[StateLock<S>]>);
+impl<S: LockSelector> Clone for Succ<S> {
+    fn clone(&self) -> Self {
+        Succ(self.0.clone(), self.1.clone())
+    }
+}
+
 pub struct State<S: LockSelector> {
     // This is very like in the traditional finite automata. Each state has a set of transitions
     // via symbols to other states. If multiple states are parallel (let's say nondeterministic)
     // successors of a state via the same symbol, they are stored in a single vector.
-    // TODO Microopt templating: For deterministic automata we transition to a single state.
-    pub explicit_transitions: Box<[(Explicit, Box<[StateLock<S>]>)]>,
-    pub pattern_transitions: Box<[(Pattern, Box<[StateLock<S>]>)]>,
-    // TODO total states are always triggered, they should have a special field in listeners.
-    // pub is_total: bool,
+    // TODO should we have transition IDs that will be returned?
+    pub explicit_transitions: Box<[(Explicit, Succ<S>)]>,
+    pub pattern_transitions: Box<[(Pattern, Succ<S>)]>,
 }
 
 pub struct ExplicitListeners<S: LockSelector> {
@@ -220,13 +227,13 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
                 }
             }
 
-            if patterns.is_empty() {
-                continue;
-            }
-
-            for (pattern, right_states) in left_state.pattern_transitions.iter() {
-                if patterns.contains(pattern) {
-                    self.add_right_states(right_states);
+            if let Explicit::Char(c) = explicit {
+                if any_pattern {
+                    for (pattern, right_states) in left_state.pattern_transitions.iter() {
+                        if pattern.contains(c) {
+                            self.add_right_states(right_states);
+                        }
+                    }
                 }
             }
         }
@@ -234,24 +241,27 @@ where StateLock<S>: Hash + Eq + std::fmt::Debug,
         (explicit_old_states, pattern_old_statess)
     }
 
-    fn add_right_states(&mut self, right_states: &Box<[StateLock<S>]>) {
-        'outer: for right_state_lock in right_states.iter() {
-            let right_state = right_state_lock.borrow();
+    fn add_right_states(&mut self, right_states: &Succ<S>) {
+        self.add_right_state(&right_states.0);
+        for right_state_lock in right_states.1.iter() {
+            self.add_right_state(right_state_lock);
+        }
+    }
 
-            for (right_sym, _) in right_state.explicit_transitions.iter() {
-                if !self.explicit_listeners
-                    .get_mut(&right_sym)
-                    .insert(right_state_lock.clone())
-                    { continue 'outer; }
-            }
+    fn add_right_state(&mut self, right_state_lock: &StateLock<S>) {
+        let right_state = right_state_lock.borrow();
 
-            for (right_sym, _) in right_state.pattern_transitions.iter() {
-                if !self.pattern_listeners
-                    .entry(right_sym.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(right_state_lock.clone())
-                    { continue 'outer; }
-            }
+        for (right_sym, _) in right_state.explicit_transitions.iter() {
+            if !self.explicit_listeners.get_mut(&right_sym).insert(right_state_lock.clone())
+                { return; }
+        }
+
+        for (right_sym, _) in right_state.pattern_transitions.iter() {
+            if !self.pattern_listeners
+                .entry(right_sym.clone())
+                .or_insert_with(HashSet::new)
+                .insert(right_state_lock.clone())
+                { return; }
         }
     }
 
@@ -288,7 +298,7 @@ mod tests {
     use crate::lock::{RcRefCellSelector, RcRefCell};
 
     type RcState = RcRefCell<State<RcRefCellSelector>>;
-    type Succ = Box<[RcState]>;
+    type RcSucc = Succ<RcRefCellSelector>;
 
     fn new_state() -> RcState {
         let result = RcRefCell::new(State {
@@ -299,28 +309,22 @@ mod tests {
         result
     }
 
-    fn new_trans(states: Vec<RcState>) -> Succ {
-        states.into_boxed_slice()
+    fn new_trans(mut states: Vec<RcState>) -> RcSucc {
+        Succ(states.pop().unwrap(), states.into_boxed_slice())
     }
 
     fn set_explicit(
         state: &RcState,
-        transitions: Vec<(Explicit, &Succ)>,
+        transitions: Vec<(Explicit, RcSucc)>,
     ) {
-        state.borrow_mut().explicit_transitions =
-            transitions.into_iter().map(|(sym, trans)| {
-                (sym, trans.clone())
-            }).collect::<Vec<_>>().into_boxed_slice();
+        state.borrow_mut().explicit_transitions = transitions.into_boxed_slice();
     }
 
     fn set_pattern(
         state: &RcState,
-        transitions: Vec<(Pattern, &Succ)>,
+        transitions: Vec<(Pattern, RcSucc)>,
     ) {
-        state.borrow_mut().pattern_transitions =
-            transitions.into_iter().map(|(sym, trans)| {
-                (sym, trans.clone())
-            }).collect::<Vec<_>>().into_boxed_slice();
+        state.borrow_mut().pattern_transitions = transitions.into_boxed_slice();
     }
 
     #[test]
@@ -334,7 +338,7 @@ mod tests {
 
         let my_set_explicit = |state_ix: usize, transitions: Vec<(u8, usize)>| {
             set_explicit(&qs[state_ix], transitions.into_iter().map(|(sym, trans_ix)|
-                (Explicit::Char(sym), &ts[trans_ix])
+                (Explicit::Char(sym), ts[trans_ix].clone())
             ).collect::<Vec<_>>());
         };
 
@@ -389,7 +393,7 @@ mod tests {
 
         let my_set_explicit = |state_ix: usize, transitions: Vec<(u8, usize)>| {
             set_explicit(&qs[state_ix], transitions.into_iter().map(|(sym, trans_ix)|
-                (Explicit::Char(sym), &ts[trans_ix])
+                (Explicit::Char(sym), ts[trans_ix].clone())
             ).collect::<Vec<_>>());
         };
 
@@ -402,7 +406,7 @@ mod tests {
 
         let my_set_pattern = |state_ix: usize, transitions: Vec<(usize, usize)>| {
             set_pattern(&qs[state_ix], transitions.into_iter().map(|(sym, trans_ix)|
-                (pats[sym].clone(), &ts[trans_ix])
+                (pats[sym].clone(), ts[trans_ix].clone())
             ).collect::<Vec<_>>());
         };
 
