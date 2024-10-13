@@ -6,6 +6,7 @@ use crate::config_parser::guards::Guard;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Explicit {
+    // TODO Microopt templating: For deterministic automata there is no OldVar
     OldVar(String),
     NewVar(String),
     EndVar,
@@ -13,19 +14,17 @@ pub enum Explicit {
 }
 
 type StateLock<S> = <S as LockSelector>::Lock<State<S>>;
-type TransLock<S> = <S as LockSelector>::Lock<Trans<S>>;
 pub type Pattern = Guard;
-
-pub struct Trans<S: LockSelector> {
-    pub states: Box<[StateLock<S>]>,
-}
 
 pub struct State<S: LockSelector> {
     // This is very like in the traditional finite automata. Each state has a set of transitions
     // via symbols to other states. If multiple states are parallel (let's say nondeterministic)
     // successors of a state via the same symbol, they are stored in a single vector.
-    pub explicit_transitions: Box<[(Explicit, TransLock<S>)]>,
-    pub pattern_transitions: Box<[(Pattern, TransLock<S>)]>,
+    // TODO Microopt templating: For deterministic automata we transition to a single state.
+    pub explicit_transitions: Box<[(Explicit, Box<[StateLock<S>]>)]>,
+    pub pattern_transitions: Box<[(Pattern, Box<[StateLock<S>]>)]>,
+    // TODO total states are always triggered, they should have a special field in listeners.
+    // pub is_total: bool,
 }
 
 pub struct ExplicitListeners<S: LockSelector> {
@@ -105,9 +104,7 @@ pub struct Listeners<S: LockSelector> {
 }
 
 impl<S: LockSelector> Listeners<S>
-where
-    StateLock<S>: Hash + Eq + std::fmt::Debug,
-    TransLock<S>: Hash + Eq + std::fmt::Debug,
+where StateLock<S>: Hash + Eq + std::fmt::Debug,
 {
     // Initialize the state of the automaton.
     pub fn new<I: IntoIterator<Item = StateLock<S>>>(initial_states: I) -> Self
@@ -214,13 +211,12 @@ where
         }
 
         // Then, let's register new listeners for transitions of the successors.
-        let mut trans = HashSet::new();
 
         for left_state_lock in all_old_states.iter() {
             let left_state = left_state_lock.borrow();
             for (sym, right_states) in left_state.explicit_transitions.iter() {
                 if explicit == *sym {
-                    trans.insert(right_states.clone());
+                    self.add_right_states(right_states);
                 }
             }
 
@@ -230,34 +226,33 @@ where
 
             for (pattern, right_states) in left_state.pattern_transitions.iter() {
                 if patterns.contains(pattern) {
-                    trans.insert(right_states.clone());
-                }
-            }
-        }
-
-        for t in trans {
-            let right_states = t.borrow();
-            'outer: for right_state_lock in right_states.states.iter() {
-                let right_state = right_state_lock.borrow();
-
-                for (right_sym, _) in right_state.explicit_transitions.iter() {
-                    if !self.explicit_listeners
-                        .get_mut(&right_sym)
-                        .insert(right_state_lock.clone())
-                        { continue 'outer; }
-                }
-
-                for (right_sym, _) in right_state.pattern_transitions.iter() {
-                    if !self.pattern_listeners
-                        .entry(right_sym.clone())
-                        .or_insert_with(HashSet::new)
-                        .insert(right_state_lock.clone())
-                        { continue 'outer; }
+                    self.add_right_states(right_states);
                 }
             }
         }
 
         (explicit_old_states, pattern_old_statess)
+    }
+
+    fn add_right_states(&mut self, right_states: &Box<[StateLock<S>]>) {
+        'outer: for right_state_lock in right_states.iter() {
+            let right_state = right_state_lock.borrow();
+
+            for (right_sym, _) in right_state.explicit_transitions.iter() {
+                if !self.explicit_listeners
+                    .get_mut(&right_sym)
+                    .insert(right_state_lock.clone())
+                    { continue 'outer; }
+            }
+
+            for (right_sym, _) in right_state.pattern_transitions.iter() {
+                if !self.pattern_listeners
+                    .entry(right_sym.clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(right_state_lock.clone())
+                    { continue 'outer; }
+            }
+        }
     }
 
     pub fn read(&mut self, explicit: Explicit)
@@ -293,7 +288,7 @@ mod tests {
     use crate::lock::{RcRefCellSelector, RcRefCell};
 
     type RcState = RcRefCell<State<RcRefCellSelector>>;
-    type RcTrans = RcRefCell<Trans<RcRefCellSelector>>;
+    type Succ = Box<[RcState]>;
 
     fn new_state() -> RcState {
         let result = RcRefCell::new(State {
@@ -304,13 +299,13 @@ mod tests {
         result
     }
 
-    fn new_trans(states: Vec<RcState>) -> RcRefCell<Trans<RcRefCellSelector>> {
-        RcRefCell::new(Trans{states: states.into_boxed_slice()})
+    fn new_trans(states: Vec<RcState>) -> Succ {
+        states.into_boxed_slice()
     }
 
     fn set_explicit(
         state: &RcState,
-        transitions: Vec<(Explicit, &RcTrans)>,
+        transitions: Vec<(Explicit, &Succ)>,
     ) {
         state.borrow_mut().explicit_transitions =
             transitions.into_iter().map(|(sym, trans)| {
@@ -320,7 +315,7 @@ mod tests {
 
     fn set_pattern(
         state: &RcState,
-        transitions: Vec<(Pattern, &RcTrans)>,
+        transitions: Vec<(Pattern, &Succ)>,
     ) {
         state.borrow_mut().pattern_transitions =
             transitions.into_iter().map(|(sym, trans)| {
