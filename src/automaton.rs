@@ -13,7 +13,7 @@ pub enum Explicit {
 
 type StateLock<S> = <S as LockSelector>::Lock<State<S>>;
 type TransLock<S> = <S as LockSelector>::Lock<Trans<S>>;
-type Pattern = (u8, u8);
+pub type Pattern = (u8, u8);
 
 pub struct Trans<S: LockSelector> {
     pub states: Box<[StateLock<S>]>,

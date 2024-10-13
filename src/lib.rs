@@ -7,6 +7,7 @@ pub mod lock;
 pub mod command;
 pub mod commands;
 pub mod automaton;
+pub mod config_parser;
 
 use crate::lock::{LockSelector, Lock};
 use crate::command::{CommandBox, CommandTarget};
