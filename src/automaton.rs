@@ -6,11 +6,10 @@ use crate::config_parser::guards::Guard;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Explicit {
-    // TODO Microopt templating: For deterministic automata there is no OldVar
-    OldVar(String),
     NewVar(String),
     EndVar,
     Char(u8),
+    OldVar(String),
 }
 
 type StateLock<S, TL> = <S as LockSelector>::Lock<State<S, TL>>;
