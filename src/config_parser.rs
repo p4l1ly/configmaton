@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json;
 use serde_json::Value;
 use crate::automaton::{Explicit, Pattern};
@@ -11,47 +13,261 @@ use ast::Ast;
 
 #[derive(Debug)]
 enum Ext {
-    Query(String),
+    GetOld(String),
     Ext(Value),
 }
+
+#[derive(Debug, Clone, Copy)]
+struct TargetIx (usize);
+impl TargetIx {
+    fn target_offset(&self, offset: usize) -> TargetIx {
+        TargetIx(self.0 + offset)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StateIx (usize);
+#[derive(Debug, Clone, Copy)]
+struct DfaIx (usize);
 
 #[derive(Debug)]
 struct Target {
     exts: Vec<Ext>,
-    states: Vec<usize>,
+    states: Vec<StateIx>,
 }
 
+#[derive(Debug)]
 struct State {
-    explicit_transitions: Vec<(Explicit, usize)>,
-    pattern_transitions: Vec<(Pattern, usize)>,
+    explicit_transitions: Vec<(Explicit, TargetIx)>,
+    pattern_transitions: Vec<(Pattern, TargetIx)>,
 }
 
 struct Parser {
     states: Vec<State>,
     targets: Vec<Target>,
+    dfas: Vec<dfa::Dfa>,
+    regexes: HashMap<String, DfaIx>,
+    min_guard_cardinality: u32,
 }
 
 impl Parser {
-    fn parse(cmd: Value) -> (Self, Target) {
+    fn parse(cmd: Value, min_guard_cardinality: u32) -> (Self, Target) {
         let mut parser = Parser {
             states: vec![],
             targets: vec![],
+            dfas: vec![],
+            regexes: HashMap::new(),
+            min_guard_cardinality,
         };
         let init = parser.parse_cmd(cmd);
+
         (parser, init)
     }
 
+    // return state_ix and key of the first checker (for construction of a new target).
     fn parse_match(
         &mut self,
         guards: Vec<Value>,
         exts: Vec<Value>,
         mut then: Target
-    ) -> (usize, String) {
+    ) -> Target {
+        if guards.len() == 0 {
+            panic!("expected at least one guard");
+        }
+
         then.exts.extend(exts.into_iter().map(|ext| Ext::Ext(ext)));
+        let mut then_ix = TargetIx(self.targets.len());
+        self.targets.push(then);
 
         let keyvals: Vec<_> = guards.into_iter().map(parse_guard).collect();
 
-        unimplemented!()
+        let dfa_ixs = keyvals.iter().map(|(key, regex)| {
+            *self.regexes.entry(key.clone()).or_insert_with(|| {
+                let dfa_ix = self.dfas.len();
+                self.dfas.push(
+                    dfa::Dfa::from_nfa(nfa::Nfa::from_ast(ast::parse_regex(&regex)))
+                );
+                DfaIx(dfa_ix)
+            })
+        }).collect::<Vec<_>>();
+
+        let state0_ix = self.states.len();
+        let target0_ix = TargetIx(self.states.len());
+
+        let get_checker_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3) };
+        let get_waiter_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3 + 1) };
+        let get_closer_state_ix = |i: usize| -> StateIx {
+            assert!(i < keyvals.len() - 1);
+            StateIx(state0_ix + i * 3 + 1)
+        };
+        let get_checker_target_ix = |i: usize| -> TargetIx {
+            assert!(i != 0);
+            target0_ix.target_offset(2 + (i - 1) * 3)
+        };
+        let get_waiter_target_ix = |i: usize| -> TargetIx {
+            if i == 0 {
+                return target0_ix;
+            }
+            target0_ix.target_offset(2 + (i - 1) * 3 + 1)
+        };
+        let get_closer_target_ix = |i: usize| -> TargetIx {
+            assert!(i < keyvals.len() - 1);
+            if i == 0 {
+                return target0_ix.target_offset(1);
+            }
+            target0_ix.target_offset(2 + (i - 1) * 3 + 2)
+        };
+
+        if keyvals.len() == 1 {
+            self.states.push(State {  // checker
+                explicit_transitions: vec![],
+                pattern_transitions: vec![],
+            });
+            self.states.push(State {  // waiter
+                explicit_transitions: vec![],
+                pattern_transitions: vec![],
+            });
+            self.targets.push(Target {  // waiter
+                exts: vec![],
+                states: vec![get_waiter_state_ix(0)],
+            });
+        } else {
+            self.states.push(State {  // checker
+                explicit_transitions: vec![],
+                pattern_transitions: vec![],
+            });
+            self.states.push(State {  // waiter
+                explicit_transitions: vec![],
+                pattern_transitions: vec![],
+            });
+            self.targets.push(Target {  // waiter
+                exts: vec![],
+                states: vec![get_waiter_state_ix(0)],
+            });
+            self.states.push(State {  // closer (nonexistent for the last guard)
+                explicit_transitions: vec![],
+                pattern_transitions: vec![],
+            });
+            self.targets.push(Target {  // closer (nonexistent for the last guard)
+                exts: vec![Ext::GetOld(keyvals[0].0.clone())],
+                states: vec![get_closer_state_ix(0)],
+            });
+            for (i, (key, _)) in keyvals[..keyvals.len() - 1].iter().enumerate().skip(1) {
+                self.states.push(State {  // checker
+                    explicit_transitions: vec![],
+                    pattern_transitions: vec![],
+                });
+                self.targets.push(Target {
+                    exts: vec![Ext::GetOld(key.clone())],
+                    states: vec![get_checker_state_ix(i)],
+                });
+                self.states.push(State {  // waiter
+                    explicit_transitions: vec![],
+                    pattern_transitions: vec![],
+                });
+                self.targets.push(Target {  // waiter
+                    exts: vec![],
+                    states: vec![get_waiter_state_ix(i)],
+                });
+                self.states.push(State {  // closer (nonexistent for the last guard)
+                    explicit_transitions: vec![],
+                    pattern_transitions: vec![],
+                });
+                self.targets.push(Target {  // closer (nonexistent for the last guard)
+                    exts: vec![Ext::GetOld(key.clone())],
+                    states: vec![get_closer_state_ix(i)],
+                });
+            }
+            let i = keyvals.len() - 1;
+            self.states.push(State {  // checker
+                explicit_transitions: vec![],
+                pattern_transitions: vec![],
+            });
+            self.targets.push(Target {  // checker
+                exts: vec![],
+                states: vec![get_checker_state_ix(i)],
+            });
+            self.states.push(State {  // waiter
+                explicit_transitions: vec![],
+                pattern_transitions: vec![],
+            });
+            self.targets.push(Target {  // waiter
+                exts: vec![],
+                states: vec![get_waiter_state_ix(i)],
+            });
+        }
+
+        let mut copy_dfa = |
+            self_states: &mut Vec<State>,
+            dfa_ix: DfaIx,
+            then_ix: TargetIx,
+            waiter_target_ix: TargetIx
+        | -> TargetIx {
+            let new_target0_ix = TargetIx(self_states.len());
+            for (dfa_state_ix, dfa_state) in self.dfas[dfa_ix.0].states.iter().enumerate() {
+                let new_state_ix = StateIx(self_states.len());
+                self_states.push(State {
+                    explicit_transitions: vec![],
+                    pattern_transitions: vec![],
+                });
+                self.targets.push(Target {
+                    exts: vec![],
+                    states: vec![new_state_ix],
+                });
+
+                let new_state = self_states.last_mut().unwrap();
+                for (guard, target) in dfa_state.transitions.iter() {
+                    if *target == dfa_state_ix {
+                        continue;
+                    }
+                    if guard.size() < self.min_guard_cardinality {
+                        panic!("not implemented");
+                    } else {
+                        new_state.pattern_transitions.push(
+                            (guard.clone(), new_target0_ix.target_offset(*target)));
+                    }
+                }
+                if dfa_state.is_final {
+                    new_state.explicit_transitions.push((Explicit::EndVar, then_ix));
+                } else {
+                    new_state.explicit_transitions.push((Explicit::EndVar, waiter_target_ix));
+                }
+            }
+            new_target0_ix
+        };
+
+        for (i, ((key, _), dfa_ix)) in
+            keyvals[..keyvals.len() - 1].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
+        {
+            let dfa_target0_ix = copy_dfa(
+                &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
+
+            self.states[get_closer_state_ix(i).0].explicit_transitions.push(
+                (Explicit::OldVar(key.clone()), dfa_target0_ix));
+
+            if i != 0 {
+                then_ix = get_closer_target_ix(i);
+            }
+        }
+
+        for (i, ((key, _), dfa_ix)) in
+            keyvals[..keyvals.len()].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
+        {
+            let dfa_target0_ix = copy_dfa(
+                &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
+
+            self.states[get_checker_state_ix(i).0].explicit_transitions.push(
+                (Explicit::OldVar(key.clone()), dfa_target0_ix));
+
+            self.states[get_waiter_state_ix(i).0].explicit_transitions.push(
+                (Explicit::NewVar(key.clone()), dfa_target0_ix));
+
+            if i != 0 {
+                then_ix = get_checker_target_ix(i);
+            }
+        }
+
+        Target{ exts: vec![Ext::GetOld(keyvals[0].0.clone())], states: vec![StateIx(state0_ix)] }
     }
 
     fn parse_cmd(&mut self, cmd: Value) -> Target {
@@ -75,8 +291,7 @@ impl Parser {
                         let guards = cmd.pop().unwrap();
                         match (exts, guards) {
                             (Value::Array(exts), Value::Array(guards)) => {
-                                let (state, query) = self.parse_match(guards, exts, nexts);
-                                Target{ exts: vec![Ext::Query(query)], states: vec![state] }
+                                self.parse_match(guards, exts, nexts)
                             },
                             _ => {
                                 panic!("expected array");
@@ -96,7 +311,7 @@ impl Parser {
 }
 
 
-fn parse_guard(guard: Value) -> (String, dfa::Dfa) {
+fn parse_guard(guard: Value) -> (String, String) {
     match guard {
         Value::Array(mut guards) => {
             if guards.len() != 2 {
@@ -106,7 +321,7 @@ fn parse_guard(guard: Value) -> (String, dfa::Dfa) {
             let key = guards.pop().unwrap();
             match (key, value) {
                 (Value::String(key), Value::String(regex)) => {
-                    (key, dfa::Dfa::from_nfa(nfa::Nfa::from_ast(ast::parse_regex(&regex))))
+                    (key, regex)
                 },
                 _ => {
                     panic!("expected string");

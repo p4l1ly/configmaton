@@ -561,6 +561,10 @@ impl Guard {
         guard
     }
 
+    pub fn size(&self) -> u32 {
+        self.0.count_ones() + self.1.count_ones()
+    }
+
     pub fn contains(&self, c: u8) -> bool {
         if c & 0x80 == 0 {
             1 << c & self.1 != 0

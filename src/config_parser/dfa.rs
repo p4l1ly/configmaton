@@ -9,12 +9,12 @@ use super::nfa::{Nfa, Cfg};
 
 
 pub struct DfaState {
-    transitions: Vec<(Guard, usize)>,
-    is_final: bool,
+    pub transitions: Vec<(Guard, usize)>,
+    pub is_final: bool,
 }
 
 pub struct Dfa {
-    states: Vec<DfaState>,
+    pub states: Vec<DfaState>,
 }
 
 impl Dfa {
