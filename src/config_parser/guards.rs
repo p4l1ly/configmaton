@@ -8,14 +8,59 @@ pub trait Monoid {
 #[derive(Hash, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 pub struct Guard(pub u128, pub u128);
 
-impl std::fmt::Debug for Guard
-{
+impl std::fmt::Debug for Guard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Guard")
-            .field(&format_args!("{:0128b}", self.0))
-            .field(&format_args!("{:0128b}", self.1))
-            .finish()
+        write!(f, "Guard(")?;
+
+        let mut in_range = false;
+        let mut range_start = 0u8;
+
+        for i in 0u8..=255u8 {
+            let contained = self.contains(i);
+            if contained && !in_range {
+                // Start of a new range
+                range_start = i;
+                in_range = true;
+            } else if !contained && in_range {
+                // End of the current range
+                if i - 1 != range_start {
+                    write_range(f, range_start, i - 1)?;
+                } else {
+                    write_byte(f, range_start)?;
+                }
+                in_range = false;
+            }
+        }
+
+        // To handle the case where the last byte (255) is also included
+        if in_range {
+            if 255 != range_start {
+                write_range(f, range_start, 255)?;
+            } else {
+                write_byte(f, 255)?;
+            }
+        }
+
+        write!(f, ")")
     }
+}
+
+fn write_byte(f: &mut std::fmt::Formatter, byte: u8) -> std::fmt::Result {
+    if byte.is_ascii_graphic() {
+        match byte {
+            b'\\' => write!(f, "\\\\"),
+            b'-' => write!(f, "\\-"),
+            _ => write!(f, "{}", byte as char),
+        }
+    } else {
+        write!(f, "\\{:02x}", byte)
+    }
+}
+
+fn write_range(f: &mut std::fmt::Formatter, start: u8, end: u8) -> std::fmt::Result {
+    write_byte(f, start)?;
+    write!(f, "-")?;
+    write_byte(f, end)
 }
 
 pub const TOPS: [Guard; 256] = [

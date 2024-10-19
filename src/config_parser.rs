@@ -1,18 +1,18 @@
 use std::collections::HashMap;
+use std::io::Write;
+use std::fmt;
 
+use serde::de::{MapAccess, Visitor, Deserialize, Deserializer, Error, Unexpected};
 use serde_json;
 use serde_json::Value;
-use crate::automaton::{Explicit, Pattern};
 
 pub mod dfa;
 pub mod guards;
 pub mod ast;
 pub mod nfa;
 
-use ast::Ast;
-
 #[derive(Debug)]
-enum Ext {
+pub enum Ext {
     GetOld(String),
     Ext(Value),
 }
@@ -31,57 +31,83 @@ struct StateIx (usize);
 struct DfaIx (usize);
 
 #[derive(Debug)]
-struct Target {
+pub struct Target {
     exts: Vec<Ext>,
     states: Vec<StateIx>,
 }
 
 #[derive(Debug)]
-struct State {
-    explicit_transitions: Vec<(Explicit, TargetIx)>,
-    pattern_transitions: Vec<(Pattern, TargetIx)>,
+pub struct Old {
+    key: String,
+
+    // The following fields are for determinisation purposes.
+    dfa: DfaIx,
+    then: TargetIx,
+    waiter: StateIx,
 }
 
-struct Parser {
+#[derive(Debug)]
+pub enum Guard {
+    Old(Old),
+    New(String),
+    EndVar,
+    Guard(guards::Guard),
+}
+
+#[derive(Debug)]
+struct State {
+    transitions: Vec<(Guard, TargetIx)>,
+}
+
+pub struct Parser {
     states: Vec<State>,
     targets: Vec<Target>,
     dfas: Vec<dfa::Dfa>,
     regexes: HashMap<String, DfaIx>,
-    min_guard_cardinality: u32,
 }
 
 impl Parser {
-    fn parse(cmd: Value, min_guard_cardinality: u32) -> (Self, Target) {
+    pub fn parse(cmds: Vec<Cmd>) -> (Self, Target) {
         let mut parser = Parser {
             states: vec![],
             targets: vec![],
             dfas: vec![],
             regexes: HashMap::new(),
-            min_guard_cardinality,
         };
-        let init = parser.parse_cmd(cmd);
+        let init = parser.parse_parallel(cmds);
 
         (parser, init)
     }
 
-    // return state_ix and key of the first checker (for construction of a new target).
+    fn parse_parallel(&mut self, cmds: Vec<Cmd>) -> Target {
+        let mut result = Target { exts: vec![], states: vec![] };
+        for cmd in cmds {
+            match cmd {
+                Cmd::Match(match_) => {
+                    let result2 = self.parse_match(match_);
+                    result.exts.extend(result2.exts.into_iter());
+                    result.states.extend(result2.states.into_iter());
+                }
+                _ => unimplemented!(),
+            }
+        }
+        result
+    }
+
     fn parse_match(
         &mut self,
-        guards: Vec<Value>,
-        exts: Vec<Value>,
-        mut then: Target
+        match_: Match,
     ) -> Target {
-        if guards.len() == 0 {
+        if match_.when.is_empty() {
             panic!("expected at least one guard");
         }
 
-        then.exts.extend(exts.into_iter().map(|ext| Ext::Ext(ext)));
+        let mut then = self.parse_parallel(match_.then);
+        then.exts.extend(match_.run.into_iter().map(|ext| Ext::Ext(ext)));
         let mut then_ix = TargetIx(self.targets.len());
         self.targets.push(then);
 
-        let keyvals: Vec<_> = guards.into_iter().map(parse_guard).collect();
-
-        let dfa_ixs = keyvals.iter().map(|(key, regex)| {
+        let dfa_ixs = match_.when.iter().map(|(key, regex)| {
             *self.regexes.entry(key.clone()).or_insert_with(|| {
                 let dfa_ix = self.dfas.len();
                 self.dfas.push(
@@ -92,13 +118,13 @@ impl Parser {
         }).collect::<Vec<_>>();
 
         let state0_ix = self.states.len();
-        let target0_ix = TargetIx(self.states.len());
+        let target0_ix = TargetIx(self.targets.len());
 
         let get_checker_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3) };
         let get_waiter_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3 + 1) };
         let get_closer_state_ix = |i: usize| -> StateIx {
-            assert!(i < keyvals.len() - 1);
-            StateIx(state0_ix + i * 3 + 1)
+            assert!(i < match_.when.len() - 1);
+            StateIx(state0_ix + i * 3 + 2)
         };
         let get_checker_target_ix = |i: usize| -> TargetIx {
             assert!(i != 0);
@@ -111,86 +137,58 @@ impl Parser {
             target0_ix.target_offset(2 + (i - 1) * 3 + 1)
         };
         let get_closer_target_ix = |i: usize| -> TargetIx {
-            assert!(i < keyvals.len() - 1);
+            assert!(i < match_.when.len() - 1);
             if i == 0 {
                 return target0_ix.target_offset(1);
             }
             target0_ix.target_offset(2 + (i - 1) * 3 + 2)
         };
 
-        if keyvals.len() == 1 {
-            self.states.push(State {  // checker
-                explicit_transitions: vec![],
-                pattern_transitions: vec![],
-            });
-            self.states.push(State {  // waiter
-                explicit_transitions: vec![],
-                pattern_transitions: vec![],
-            });
+        if match_.when.len() == 1 {
+            self.states.push(State { transitions: vec![] });  // checker
+            self.states.push(State { transitions: vec![] });  // waiter
             self.targets.push(Target {  // waiter
                 exts: vec![],
                 states: vec![get_waiter_state_ix(0)],
             });
         } else {
-            self.states.push(State {  // checker
-                explicit_transitions: vec![],
-                pattern_transitions: vec![],
-            });
-            self.states.push(State {  // waiter
-                explicit_transitions: vec![],
-                pattern_transitions: vec![],
-            });
+            self.states.push(State { transitions: vec![] });  // checker
+            self.states.push(State { transitions: vec![] });  // waiter
             self.targets.push(Target {  // waiter
                 exts: vec![],
                 states: vec![get_waiter_state_ix(0)],
             });
-            self.states.push(State {  // closer (nonexistent for the last guard)
-                explicit_transitions: vec![],
-                pattern_transitions: vec![],
-            });
-            self.targets.push(Target {  // closer (nonexistent for the last guard)
-                exts: vec![Ext::GetOld(keyvals[0].0.clone())],
+            // closer (nonexistent for the last guard)
+            self.states.push(State { transitions: vec![] });
+            self.targets.push(Target {
+                exts: vec![Ext::GetOld(match_.when[0].0.clone())],
                 states: vec![get_closer_state_ix(0)],
             });
-            for (i, (key, _)) in keyvals[..keyvals.len() - 1].iter().enumerate().skip(1) {
-                self.states.push(State {  // checker
-                    explicit_transitions: vec![],
-                    pattern_transitions: vec![],
-                });
+            for (i, (key, _)) in match_.when[..match_.when.len() - 1].iter().enumerate().skip(1) {
+                self.states.push(State { transitions: vec![] });  // checker
                 self.targets.push(Target {
                     exts: vec![Ext::GetOld(key.clone())],
                     states: vec![get_checker_state_ix(i)],
                 });
-                self.states.push(State {  // waiter
-                    explicit_transitions: vec![],
-                    pattern_transitions: vec![],
-                });
+                self.states.push(State { transitions: vec![] });  // waiter
                 self.targets.push(Target {  // waiter
                     exts: vec![],
                     states: vec![get_waiter_state_ix(i)],
                 });
-                self.states.push(State {  // closer (nonexistent for the last guard)
-                    explicit_transitions: vec![],
-                    pattern_transitions: vec![],
-                });
-                self.targets.push(Target {  // closer (nonexistent for the last guard)
+                // closer (nonexistent for the last guard)
+                self.states.push(State { transitions: vec![] });
+                self.targets.push(Target {
                     exts: vec![Ext::GetOld(key.clone())],
                     states: vec![get_closer_state_ix(i)],
                 });
             }
-            let i = keyvals.len() - 1;
-            self.states.push(State {  // checker
-                explicit_transitions: vec![],
-                pattern_transitions: vec![],
-            });
+            let i = match_.when.len() - 1;
+            self.states.push(State { transitions: vec![] });  // checker
             self.targets.push(Target {  // checker
-                exts: vec![],
+                exts: vec![Ext::GetOld(match_.when[i].0.clone())],
                 states: vec![get_checker_state_ix(i)],
             });
-            self.states.push(State {  // waiter
-                explicit_transitions: vec![],
-                pattern_transitions: vec![],
-            });
+            self.states.push(State { transitions: vec![] });  // waiter
             self.targets.push(Target {  // waiter
                 exts: vec![],
                 states: vec![get_waiter_state_ix(i)],
@@ -206,10 +204,7 @@ impl Parser {
             let new_target0_ix = TargetIx(self_states.len());
             for (dfa_state_ix, dfa_state) in self.dfas[dfa_ix.0].states.iter().enumerate() {
                 let new_state_ix = StateIx(self_states.len());
-                self_states.push(State {
-                    explicit_transitions: vec![],
-                    pattern_transitions: vec![],
-                });
+                self_states.push(State { transitions: vec![] }); 
                 self.targets.push(Target {
                     exts: vec![],
                     states: vec![new_state_ix],
@@ -220,151 +215,275 @@ impl Parser {
                     if *target == dfa_state_ix {
                         continue;
                     }
-                    if guard.size() < self.min_guard_cardinality {
-                        panic!("not implemented");
-                    } else {
-                        new_state.pattern_transitions.push(
-                            (guard.clone(), new_target0_ix.target_offset(*target)));
-                    }
+                    new_state.transitions.push(
+                        (Guard::Guard(guard.clone()), new_target0_ix.target_offset(*target)));
                 }
                 if dfa_state.is_final {
-                    new_state.explicit_transitions.push((Explicit::EndVar, then_ix));
+                    new_state.transitions.push((Guard::EndVar, then_ix));
                 } else {
-                    new_state.explicit_transitions.push((Explicit::EndVar, waiter_target_ix));
+                    new_state.transitions.push((Guard::EndVar, waiter_target_ix));
                 }
             }
             new_target0_ix
         };
 
         for (i, ((key, _), dfa_ix)) in
-            keyvals[..keyvals.len() - 1].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
+            match_.when[..match_.when.len() - 1].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
         {
             let dfa_target0_ix = copy_dfa(
                 &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
 
-            self.states[get_closer_state_ix(i).0].explicit_transitions.push(
-                (Explicit::OldVar(key.clone()), dfa_target0_ix));
+            let guard = Guard::Old(Old {
+                key: key.clone(),
+                dfa: *dfa_ix,
+                then: then_ix,
+                waiter: get_waiter_state_ix(i),
+            });
+            self.states[get_closer_state_ix(i).0].transitions.push((guard, dfa_target0_ix));
 
-            if i != 0 {
-                then_ix = get_closer_target_ix(i);
-            }
+            then_ix = get_closer_target_ix(i);
         }
 
         for (i, ((key, _), dfa_ix)) in
-            keyvals[..keyvals.len()].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
+            match_.when[..match_.when.len()].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
         {
             let dfa_target0_ix = copy_dfa(
                 &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
 
-            self.states[get_checker_state_ix(i).0].explicit_transitions.push(
-                (Explicit::OldVar(key.clone()), dfa_target0_ix));
+            let guard = Guard::Old(Old {
+                key: key.clone(),
+                dfa: *dfa_ix,
+                then: then_ix,
+                waiter: get_waiter_state_ix(i),
+            });
+            self.states[get_checker_state_ix(i).0].transitions.push(
+                (guard, dfa_target0_ix));
 
-            self.states[get_waiter_state_ix(i).0].explicit_transitions.push(
-                (Explicit::NewVar(key.clone()), dfa_target0_ix));
+            self.states[get_waiter_state_ix(i).0].transitions.push(
+                (Guard::New(key.clone()), dfa_target0_ix));
 
             if i != 0 {
                 then_ix = get_checker_target_ix(i);
             }
         }
 
-        Target{ exts: vec![Ext::GetOld(keyvals[0].0.clone())], states: vec![StateIx(state0_ix)] }
+        Target{
+            exts: vec![Ext::GetOld(match_.when[0].0.clone())],
+            states: vec![StateIx(state0_ix)]
+        }
     }
 
-    fn parse_cmd(&mut self, cmd: Value) -> Target {
-        match cmd {
-            Value::Array(mut cmd) => {
-                match cmd[0].as_str() {
-                    Some("fork") => {
-                        let mut result = self.parse_cmd(cmd.pop().unwrap());
-                        for child in cmd.drain(1..) {
-                            let child_target = self.parse_cmd(child);
-                            result.states.extend(child_target.states);
-                            result.exts.extend(child_target.exts);
-                        }
-                        result
-                    },
-                    Some("match") => {
-                        let nexts = if cmd.len() == 4 {
-                            self.parse_cmd(cmd.pop().unwrap())
-                        } else { Target{ exts: vec![], states: vec![]} };
-                        let exts = cmd.pop().unwrap();
-                        let guards = cmd.pop().unwrap();
-                        match (exts, guards) {
-                            (Value::Array(exts), Value::Array(guards)) => {
-                                self.parse_match(guards, exts, nexts)
-                            },
-                            _ => {
-                                panic!("expected array");
+    pub fn to_dot<W: Write>(&self, init: Target, mut writer: W) {
+        writer.write_all(b"digraph G {\n").unwrap();
+
+        for i in 0..self.states.len() {
+            writer.write_all(format!("  q{}\n", i).as_bytes()).unwrap();
+        }
+
+        for i in 0..self.targets.len() {
+            writer.write_all(
+                format!("  t{} [ shape=\"rect\" ]\n", i).as_bytes()).unwrap();
+            writer.write_all(
+                format!("  e{} [ shape=\"diamond\" ]\n", i).as_bytes()).unwrap();
+        }
+
+        // println!("~~~ {:?} ~~~> {:?}", init.exts, init.states);
+        writer.write_all(b"  ti [ shape=\"rect\" ]\n").unwrap();
+        writer.write_all(b"  ei [ shape=\"diamond\" ]\n").unwrap();
+
+        let fmte = |exts: &Vec<Ext>| -> String {
+            exts.iter().map(|ext| match ext {
+                Ext::GetOld(s) => format!("GetOld({})", s),
+                Ext::Ext(v) => format!("{:?}", v),
+            }).collect::<Vec<_>>().join(", ").replace("\\", "\\\\").replace("\"", "\\\"")
+        };
+
+        let fmtg = |guard: &Guard| -> String {
+            match guard {
+                Guard::Old(s) => format!("Old({})", s.key),
+                Guard::New(s) => format!("New({})", s),
+                Guard::EndVar => "EndVar".to_string(),
+                Guard::Guard(g) => format!("{:?}", g),
+            }.replace("\\", "\\\\").replace("\"", "\\\"")
+        };
+
+        writer.write_all(
+            format!("  ti -> ei [label=\"{}\"]\n", fmte(&init.exts)).as_bytes()).unwrap();
+        for state in init.states {
+            writer.write_all(format!("  ei -> q{}\n", state.0).as_bytes()).unwrap();
+        }
+
+        for (i, state) in self.states.iter().enumerate() {
+            for (guard, target) in state.transitions.iter() {
+                writer.write_all(
+                    format!("  q{} -> t{} [label=\"{}\"]\n", i, target.0, fmtg(&guard)).as_bytes()
+                ).unwrap();
+            }
+        }
+
+        for (i, target) in self.targets.iter().enumerate() {
+            writer.write_all(
+                format!("  t{} -> e{} [label=\"{}\"]\n", i, i, fmte(&target.exts)).as_bytes()
+            ).unwrap();
+            for state in target.states.iter() {
+                writer.write_all(format!("  e{} -> q{}\n", i, state.0).as_bytes()).unwrap();
+            }
+        }
+
+        writer.write_all(b"}\n").unwrap();
+    }
+}
+
+#[derive(Debug)]
+pub enum Cmd {
+    Match(Match),
+    Label(String, Vec<Cmd>),  // No support yet.
+    Goto(String),  // No support yet.
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct Match {
+    when: Vec<(String, String)>,
+    run: Vec<Value>,
+    then: Vec<Cmd>,
+}
+
+struct CmdVisitor;
+
+impl<'de> Visitor<'de> for CmdVisitor {
+    type Value = Cmd;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a match")
+    }
+
+    fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
+    where
+        V: MapAccess<'de>,
+    {
+        let mut when = None;
+        let mut run = None;
+        let mut then = None;
+        while let Some(key) = map.next_key()? {
+            match key {
+                "when" => {
+                    if when.is_some() {
+                        return Err(Error::duplicate_field("when"));
+                    }
+                    let when_map: Value = map.next_value()?;
+                    match when_map {
+                        Value::Object(obj) => {
+                            let mut when_map = vec![];
+                            for (key, value) in obj {
+                                match value {
+                                    Value::String(value) => when_map.push((key, value)),
+                                    _ => return Err(
+                                        Error::invalid_type(
+                                            Unexpected::Other("match value is not a string"),
+                                            &"a string (regex)"
+                                        )
+                                    ),
+                                }
                             }
-                        }
-                    },
-                    _ => {
-                        panic!("unknown command");
+                            when = Some(when_map);
+                        },
+                        _ => return Err(
+                            Error::invalid_type(
+                                Unexpected::Other("match is not an object"),
+                                &"an object of key-regex pairs"
+                            )
+                        ),
                     }
                 }
-            }
-            _ => {
-                panic!("expected array");
-            }
-        }
-    }
-}
-
-
-fn parse_guard(guard: Value) -> (String, String) {
-    match guard {
-        Value::Array(mut guards) => {
-            if guards.len() != 2 {
-                panic!("Invalid guard, expected array of two strings (key, regex)");
-            }
-            let value = guards.pop().unwrap();
-            let key = guards.pop().unwrap();
-            match (key, value) {
-                (Value::String(key), Value::String(regex)) => {
-                    (key, regex)
-                },
+                "run" => {
+                    if run.is_some() {
+                        return Err(Error::duplicate_field("run"));
+                    }
+                    run = Some(map.next_value()?);
+                }
+                "then" => {
+                    if then.is_some() {
+                        return Err(Error::duplicate_field("then"));
+                    }
+                    then = Some(map.next_value()?);
+                }
                 _ => {
-                    panic!("expected string");
+                    return Err(Error::unknown_field(key, &["when", "run", "then"]));
                 }
             }
-        },
-        _ => {
-            panic!("Invalid guard, expected array");
         }
+        let when = when.ok_or_else(|| Error::missing_field("when"))?;
+        let run = run.unwrap_or_else(|| vec![]);
+        let then = then.unwrap_or_else(|| vec![]);
+        Ok(Cmd::Match(Match { when, run, then }))
     }
 }
 
+impl<'de> Deserialize<'de> for Cmd {
+    fn deserialize<D>(deserializer: D) -> Result<Cmd, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(CmdVisitor)
+    }
+}
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
-    use std::io::BufReader;
 
     #[test]
-    fn config_to_nfa() {
+    fn config_to_automaton_complex() {
         // read and parse file tests/config.json
-        let file = File::open("tests/config.json").expect("file not found");
-        let reader = BufReader::new(file);
-        let config: Value = serde_json::from_reader(reader).unwrap();
+        let config: Vec<Cmd> = serde_json::from_str(r#"[
+            { 
+                "when": {
+                    "foo": "bar",
+                    "qux": "a.*"
+                },
+                "run": [ { "set": { "match1": "passed" } } ]
+            },
+            {
+                "when": { "foo": "baz" },
+                "run": [ { "set": { "match2": "passed" } } ],
+                "then": [
+                    {
+                        "when": { "qux": "a.*" },
+                        "run": [ { "set": { "match3": "passed" } } ]
+                    },
+                    {
+                        "when": { "qux": "ahoy" },
+                        "run": [ { "set": { "match4": "passed" } } ]
+                    }
+                ]
+            }
+        ]"#).unwrap();
 
         let (parser, init) = Parser::parse(config);
-        println!("~~~ {:?} ~~~> {:?}", init.exts, init.states);
 
-        for (i, state) in parser.states.into_iter().enumerate() {
-            for (guard, target) in state.explicit_transitions {
-                println!("{} --- {:?} ---> {:?};", i, guard, target);
+        // The output automaton is for now only for visual checking.
+        let file = std::fs::File::create("/tmp/test_complex.dot").unwrap();
+        parser.to_dot(init, std::io::BufWriter::new(file));
+    }
+
+    #[test]
+    fn config_to_automaton_simple() {
+        // read and parse file tests/config.json
+        let config: Vec<Cmd> = serde_json::from_str(r#"[
+            { 
+                "when": {
+                    "foo": "a",
+                    "bar": "b"
+                },
+                "run": [ "you win" ]
             }
-            for (guard, target) in state.pattern_transitions {
-                println!("{} --- {:?} ---> {:?};", i, guard, target);
-            }
-        }
+        ]"#).unwrap();
 
-        for (i, target) in parser.targets.into_iter().enumerate() {
-            println!("{} ~~~ {:?} ~~~> {:?};", i, target.exts, target.states);
-        }
+        let (parser, init) = Parser::parse(config);
 
-        // assert!(false);
+        // The output automaton is for now only for visual checking.
+        let file = std::fs::File::create("/tmp/test_simple.dot").unwrap();
+        parser.to_dot(init, std::io::BufWriter::new(file));
     }
 }

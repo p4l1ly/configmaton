@@ -17,6 +17,7 @@ pub fn parse_regex(regex: &str) -> Ast {
 fn parse_ext_ast(ext: &ast::Ast) -> Ast {
     match ext {
         ast::Ast::Literal(lit) => { let c = lit.c as u8; Ast::Range(c, c) },
+        ast::Ast::Dot(_) => { Ast::Range(0, 255) },
         ast::Ast::Concat(x) => {
             let mut result = parse_ext_ast(&x.asts[0]);
             for child in x.asts[1..].iter() {

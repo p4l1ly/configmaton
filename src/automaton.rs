@@ -1,4 +1,4 @@
-use std::{collections::{hash_map::Entry, hash_set, HashMap, HashSet}, hash::Hash, iter::Zip, mem::MaybeUninit, vec};
+use std::{collections::{hash_map::Entry, HashMap, HashSet}, hash::Hash, mem::MaybeUninit};
 use std::ptr::addr_of_mut;
 
 use crate::lock::{LockSelector, Lock};
