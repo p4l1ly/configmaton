@@ -1,4 +1,5 @@
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
+use indexmap::IndexSet;  // we use IndexSet for faster worst-case iteration
 use std::{hash::Hash, mem::MaybeUninit};
 use std::ptr::addr_of_mut;
 
@@ -81,10 +82,10 @@ pub struct State<S: LockSelector, TT> {
 }
 
 pub struct ExplicitListeners<S: LockSelector, TT> {
-    old_vars: HashMap<String, HashSet<StateLock<S, TT>>>,
-    new_vars: HashMap<String, HashSet<StateLock<S, TT>>>,
-    end_var: HashSet<StateLock<S, TT>>,
-    chars: [HashSet<StateLock<S, TT>>; 256],
+    old_vars: HashMap<String, IndexSet<StateLock<S, TT>>>,
+    new_vars: HashMap<String, IndexSet<StateLock<S, TT>>>,
+    end_var: IndexSet<StateLock<S, TT>>,
+    chars: [IndexSet<StateLock<S, TT>>; 256],
 }
 
 impl<S: LockSelector, TT> ExplicitListeners<S, TT>
@@ -95,12 +96,12 @@ where
         ExplicitListeners {
             old_vars: HashMap::new(),
             new_vars: HashMap::new(),
-            end_var: HashSet::new(),
+            end_var: IndexSet::new(),
             chars: unsafe {
                 let mut chars = MaybeUninit::uninit();
-                let pchars: *mut [HashSet<StateLock<S, TT>>; 256] = chars.as_mut_ptr();
+                let pchars: *mut [IndexSet<StateLock<S, TT>>; 256] = chars.as_mut_ptr();
                 for i in 0..256 {
-                    addr_of_mut!((*pchars)[i]).write(HashSet::new());
+                    addr_of_mut!((*pchars)[i]).write(IndexSet::new());
                 }
                 chars.assume_init()
             },
@@ -110,10 +111,10 @@ where
     pub fn add(&mut self, sym: Explicit, state: StateLock<S, TT>) {
         match sym {
             Explicit::OldVar(s) => {
-                self.old_vars.entry(s).or_insert_with(HashSet::new).insert(state);
+                self.old_vars.entry(s).or_insert_with(IndexSet::new).insert(state);
             },
             Explicit::NewVar(s) => {
-                self.new_vars.entry(s).or_insert_with(HashSet::new).insert(state);
+                self.new_vars.entry(s).or_insert_with(IndexSet::new).insert(state);
             },
             Explicit::EndVar => {
                 self.end_var.insert(state);
@@ -124,13 +125,13 @@ where
         }
     }
 
-    pub fn get_mut(&mut self, sym: &Explicit) -> &mut HashSet<StateLock<S, TT>> {
+    pub fn get_mut(&mut self, sym: &Explicit) -> &mut IndexSet<StateLock<S, TT>> {
         match sym {
             Explicit::OldVar(s) => {
-                self.old_vars.entry(s.clone()).or_insert_with(HashSet::new)
+                self.old_vars.entry(s.clone()).or_insert_with(IndexSet::new)
             },
             Explicit::NewVar(s) => {
-                self.new_vars.entry(s.clone()).or_insert_with(HashSet::new)
+                self.new_vars.entry(s.clone()).or_insert_with(IndexSet::new)
             }
             Explicit::EndVar => &mut self.end_var,
             Explicit::Char(c) => &mut self.chars[*c as usize],
@@ -154,7 +155,7 @@ where StateLock<S, TT>: std::fmt::Debug,
 pub struct Listeners<S: LockSelector, TT> {
     // Mapping from symbols to such current states from which a transition via the symbol exists.
     pub explicit_listeners: ExplicitListeners<S, TT>,
-    pub pattern_listeners: HashMap<Pattern, HashSet<StateLock<S, TT>>>,
+    pub pattern_listeners: HashMap<Pattern, IndexSet<StateLock<S, TT>>>,
     pub self_handling_sparse_states: Vec<SelfHandlingSparseStateLock<S, TT>>,
     pub self_handling_dense_states: Vec<SelfHandlingDenseStateLock<S, TT>>,
 }
@@ -188,7 +189,7 @@ impl<S: LockSelector, TT> Listeners<S, TT>
             self.pattern_listeners.retain(|pattern, states|
                 if pattern.contains(c) {
                     any_pattern = true;
-                    all_old_states.extend(states.drain());
+                    all_old_states.extend(states.drain(..));
                     false
                 } else { true }
             );
@@ -206,7 +207,7 @@ impl<S: LockSelector, TT> Listeners<S, TT>
                 if explicit != *sym {
                     // Remove listeners for transitions of the left_state (other than the one via
                     // `symbol` which is already removed).
-                    self.explicit_listeners.get_mut(&sym).remove(left_state_lock);
+                    self.explicit_listeners.get_mut(&sym).swap_remove(left_state_lock);
                 }
             }
 
@@ -220,7 +221,7 @@ impl<S: LockSelector, TT> Listeners<S, TT>
                     Entry::Occupied(mut entry) => {
                         let is_empty = {
                             let x = entry.get_mut();
-                            x.remove(left_state_lock);
+                            x.swap_remove(left_state_lock);
                             x.is_empty()
                         };
                         if is_empty {
@@ -325,7 +326,7 @@ impl<S: LockSelector, TT> Listeners<S, TT>
                 for (pattern, _) in state.pattern_trans.iter() {
                     if !self.pattern_listeners
                         .entry(pattern.clone())
-                        .or_insert_with(HashSet::new)
+                        .or_insert_with(IndexSet::new)
                         .insert(state_lock.clone())
                         { return; }
                 }
