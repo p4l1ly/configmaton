@@ -14,28 +14,28 @@ pub enum Explicit {
 
 pub type Pattern = Guard;
 
-type StateLock<S, TL> = <S as LockSelector>::Lock<State<S, TL>>;
-type SelfHandlingSparseStateLock<S, TL> = <S as LockSelector>::Lock<SelfHandlingSparseState<S, TL>>;
-type SelfHandlingDenseStateLock<S, TL> = <S as LockSelector>::Lock<SelfHandlingDenseState<S, TL>>;
-type TransBodyLock<S, TL> = <S as LockSelector>::Lock<TranBody<S, TL>>;
+type StateLock<S, TT> = <S as LockSelector>::Lock<State<S, TT>>;
+type SelfHandlingSparseStateLock<S, TT> = <S as LockSelector>::Lock<SelfHandlingSparseState<S, TT>>;
+type SelfHandlingDenseStateLock<S, TT> = <S as LockSelector>::Lock<SelfHandlingDenseState<S, TT>>;
+type TransBodyLock<S, TT> = <S as LockSelector>::Lock<TranBody<S, TT>>;
 
 // There will be always at least one successor and mostly only one. Therefore we store the first
 // successor specially, to avoid indirection.
-pub struct Succ<S: LockSelector, TL>(AnyStateLock<S, TL>, Box<[AnyStateLock<S, TL>]>);
+pub struct Succ<S: LockSelector, TT>(AnyStateLock<S, TT>, Box<[AnyStateLock<S, TT>]>);
 
-impl<S: LockSelector, TL> Clone for Succ<S, TL> {
+impl<S: LockSelector, TT> Clone for Succ<S, TT> {
     fn clone(&self) -> Self {
         Succ(self.0.clone(), self.1.clone())
     }
 }
 
-pub enum AnyStateLock<S: LockSelector, TL> {
-    Normal(StateLock<S, TL>),
-    Sparse(SelfHandlingSparseStateLock<S, TL>),
-    Dense(SelfHandlingDenseStateLock<S, TL>),
+pub enum AnyStateLock<S: LockSelector, TT> {
+    Normal(StateLock<S, TT>),
+    Sparse(SelfHandlingSparseStateLock<S, TT>),
+    Dense(SelfHandlingDenseStateLock<S, TT>),
 }
 
-impl<S: LockSelector, TL> Clone for AnyStateLock<S, TL> {
+impl<S: LockSelector, TT> Clone for AnyStateLock<S, TT> {
     fn clone(&self) -> Self {
         match self {
             AnyStateLock::Normal(lock) => AnyStateLock::Normal(lock.clone()),
@@ -45,50 +45,50 @@ impl<S: LockSelector, TL> Clone for AnyStateLock<S, TL> {
     }
 }
 
-pub struct TranBody<S: LockSelector, TL> {
-    pub right_states: Succ<S, TL>,
-    pub transaction_listener: TL,
+pub struct TranBody<S: LockSelector, TT> {
+    pub right_states: Succ<S, TT>,
+    pub tran_trigger: TT,
 }
 
-pub enum Tran<S: LockSelector, TL> {
-    Direct(TranBody<S, TL>),
-    Shared(TransBodyLock<S, TL>),
+pub enum Tran<S: LockSelector, TT> {
+    Direct(TranBody<S, TT>),
+    Shared(TransBodyLock<S, TT>),
 }
 
-pub trait TranListener {
-    fn run(&self);
+pub trait TranListener<TT> {
+    fn trigger(&mut self, tran_trigger: &TT);
 }
 
-pub struct SelfHandlingSparseState<S: LockSelector, TL> {
-    pub explicit_trans: HashMap<Explicit, Tran<S, TL>>,
-    pub pattern_trans: Vec<(Pattern, Tran<S, TL>)>,
+pub struct SelfHandlingSparseState<S: LockSelector, TT> {
+    pub explicit_trans: HashMap<Explicit, Tran<S, TT>>,
+    pub pattern_trans: Vec<(Pattern, Tran<S, TT>)>,
 }
 
-pub struct SelfHandlingDenseState<S: LockSelector, TL> {
-    pub char_trans: [Tran<S, TL>; 256],
-    pub endvar_tran: Tran<S, TL>,
-    pub old_trans: HashMap<String, Tran<S, TL>>,
-    pub new_trans: HashMap<String, Tran<S, TL>>,
+pub struct SelfHandlingDenseState<S: LockSelector, TT> {
+    pub char_trans: [Tran<S, TT>; 256],
+    pub endvar_tran: Tran<S, TT>,
+    pub old_trans: HashMap<String, Tran<S, TT>>,
+    pub new_trans: HashMap<String, Tran<S, TT>>,
 }
 
-pub struct State<S: LockSelector, TL> {
+pub struct State<S: LockSelector, TT> {
     // This is very like in the traditional finite automata. Each state has a set of transitions
     // via symbols to other states. If multiple states are parallel (let's say nondeterministic)
     // successors of a state via the same symbol, they are stored in a single vector.
-    pub explicit_trans: Box<[(Explicit, Tran<S, TL>)]>,
-    pub pattern_trans: Box<[(Pattern, Tran<S, TL>)]>,
+    pub explicit_trans: Box<[(Explicit, Tran<S, TT>)]>,
+    pub pattern_trans: Box<[(Pattern, Tran<S, TT>)]>,
 }
 
-pub struct ExplicitListeners<S: LockSelector, TL> {
-    old_vars: HashMap<String, HashSet<StateLock<S, TL>>>,
-    new_vars: HashMap<String, HashSet<StateLock<S, TL>>>,
-    end_var: HashSet<StateLock<S, TL>>,
-    chars: [HashSet<StateLock<S, TL>>; 256],
+pub struct ExplicitListeners<S: LockSelector, TT> {
+    old_vars: HashMap<String, HashSet<StateLock<S, TT>>>,
+    new_vars: HashMap<String, HashSet<StateLock<S, TT>>>,
+    end_var: HashSet<StateLock<S, TT>>,
+    chars: [HashSet<StateLock<S, TT>>; 256],
 }
 
-impl<S: LockSelector, TL> ExplicitListeners<S, TL>
+impl<S: LockSelector, TT> ExplicitListeners<S, TT>
 where
-    StateLock<S, TL>: Hash + Eq + std::fmt::Debug,
+    StateLock<S, TT>: Hash + Eq + std::fmt::Debug,
 {
     pub fn new() -> Self {
         ExplicitListeners {
@@ -97,7 +97,7 @@ where
             end_var: HashSet::new(),
             chars: unsafe {
                 let mut chars = MaybeUninit::uninit();
-                let pchars: *mut [HashSet<StateLock<S, TL>>; 256] = chars.as_mut_ptr();
+                let pchars: *mut [HashSet<StateLock<S, TT>>; 256] = chars.as_mut_ptr();
                 for i in 0..256 {
                     addr_of_mut!((*pchars)[i]).write(HashSet::new());
                 }
@@ -106,7 +106,7 @@ where
         }
     }
 
-    pub fn add(&mut self, sym: Explicit, state: StateLock<S, TL>) {
+    pub fn add(&mut self, sym: Explicit, state: StateLock<S, TT>) {
         match sym {
             Explicit::OldVar(s) => {
                 self.old_vars.entry(s).or_insert_with(HashSet::new).insert(state);
@@ -123,7 +123,7 @@ where
         }
     }
 
-    pub fn get_mut(&mut self, sym: &Explicit) -> &mut HashSet<StateLock<S, TL>> {
+    pub fn get_mut(&mut self, sym: &Explicit) -> &mut HashSet<StateLock<S, TT>> {
         match sym {
             Explicit::OldVar(s) => {
                 self.old_vars.entry(s.clone()).or_insert_with(HashSet::new)
@@ -137,8 +137,8 @@ where
     }
 }
 
-impl<S: LockSelector, TL> std::fmt::Debug for ExplicitListeners<S, TL>
-where StateLock<S, TL>: std::fmt::Debug,
+impl<S: LockSelector, TT> std::fmt::Debug for ExplicitListeners<S, TT>
+where StateLock<S, TT>: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExplicitListeners")
@@ -150,21 +150,21 @@ where StateLock<S, TL>: std::fmt::Debug,
     }
 }
 
-pub struct Listeners<S: LockSelector, TL> {
+pub struct Listeners<S: LockSelector, TT> {
     // Mapping from symbols to such current states from which a transition via the symbol exists.
-    pub explicit_listeners: ExplicitListeners<S, TL>,
-    pub pattern_listeners: HashMap<Pattern, HashSet<StateLock<S, TL>>>,
-    pub self_handling_sparse_states: Vec<SelfHandlingSparseStateLock<S, TL>>,
-    pub self_handling_dense_states: Vec<SelfHandlingDenseStateLock<S, TL>>,
+    pub explicit_listeners: ExplicitListeners<S, TT>,
+    pub pattern_listeners: HashMap<Pattern, HashSet<StateLock<S, TT>>>,
+    pub self_handling_sparse_states: Vec<SelfHandlingSparseStateLock<S, TT>>,
+    pub self_handling_dense_states: Vec<SelfHandlingDenseStateLock<S, TT>>,
 }
 
-impl<S: LockSelector, TL: TranListener> Listeners<S, TL>
+impl<S: LockSelector, TT> Listeners<S, TT>
 where
-    StateLock<S, TL>: Hash + Eq + std::fmt::Debug,
-    TransBodyLock<S, TL>: Hash + Eq + std::fmt::Debug,
+    StateLock<S, TT>: Hash + Eq + std::fmt::Debug,
+    TransBodyLock<S, TT>: Hash + Eq + std::fmt::Debug,
 {
     // Initialize the state of the automaton.
-    pub fn new<I: IntoIterator<Item = AnyStateLock<S, TL>>>(initial_states: I) -> Self
+    pub fn new<I: IntoIterator<Item = AnyStateLock<S, TT>>>(initial_states: I) -> Self
     {
         let mut result = Listeners {
             explicit_listeners: ExplicitListeners::new(),
@@ -179,7 +179,7 @@ where
     }
 
     // Read a symbol, perform transitions.
-    pub fn read(&mut self, explicit: Explicit) {
+    pub fn read<TL: TranListener<TT>>(&mut self, explicit: Explicit, tl: &mut TL) {
         dbg!(&explicit, &self.explicit_listeners, &self.pattern_listeners);
 
         // Prepare the results.
@@ -238,17 +238,37 @@ where
 
         // Then, let's register new listeners for transitions of the successors.
         let mut visited_trans = HashSet::new();
+
+        let mut follow_tran_body = |slf: &mut Self, body: &TranBody<S, TT>| {
+            slf.add_right_state(&body.right_states.0);
+            for right_state in body.right_states.1.iter() {
+                slf.add_right_state(right_state);
+            }
+            tl.trigger(&body.tran_trigger);
+        };
+
+        let mut follow_tran = |slf: &mut Self, tran: &Tran<S, TT>| {
+            match tran {
+                Tran::Direct(body) => follow_tran_body(slf, body),
+                Tran::Shared(lock) => {
+                    if !visited_trans.insert(lock.clone()) { return; }
+                    let body = lock.borrow();
+                    follow_tran_body(slf, &*body);
+                },
+            }
+        };
+
         for left_state_lock in all_old_states.iter() {
             let left_state = left_state_lock.borrow();
             for (sym, tran) in left_state.explicit_trans.iter() {
-                if explicit == *sym { self.follow_tran(tran, &mut visited_trans); }
+                if explicit == *sym { follow_tran(self, tran); }
             }
 
             if !any_pattern { continue; }
 
             if let Explicit::Char(c) = explicit {
                 for (pattern, tran) in left_state.pattern_trans.iter() {
-                    if pattern.contains(c) { self.follow_tran(tran, &mut visited_trans); }
+                    if pattern.contains(c) { follow_tran(self, tran); }
                 }
             }
         }
@@ -259,13 +279,13 @@ where
             let mut transitioned = false;
             state.explicit_trans.get(&explicit).map(|tran| {
                 transitioned = true;
-                self.follow_tran(tran, &mut visited_trans);
+                follow_tran(self, tran);
             });
             if let Explicit::Char(c) = explicit {
                 for (pattern, tran) in state.pattern_trans.iter() {
                     if pattern.contains(c) {
                         transitioned = true;
-                        self.follow_tran(tran, &mut visited_trans);
+                        follow_tran(self, tran);
                     }
                 }
             }
@@ -278,45 +298,24 @@ where
             let state = state_lock.borrow();
             match &explicit {
                 Explicit::Char(c) =>
-                    self.follow_tran(&state.char_trans[*c as usize], &mut visited_trans),
+                    follow_tran(self, &state.char_trans[*c as usize]),
                 Explicit::EndVar =>
-                    self.follow_tran(&state.endvar_tran, &mut visited_trans),
+                    follow_tran(self, &state.endvar_tran),
                 Explicit::OldVar(s) =>
                     match state.old_trans.get(s) {
-                        Some(tran) => self.follow_tran(tran, &mut visited_trans),
+                        Some(tran) => follow_tran(self, tran),
                         None => self.self_handling_dense_states.push(state_lock.clone()),
                     },
                 Explicit::NewVar(s) =>
                     match state.new_trans.get(s) {
-                        Some(tran) => self.follow_tran(tran, &mut visited_trans),
+                        Some(tran) => follow_tran(self, tran),
                         None => self.self_handling_dense_states.push(state_lock.clone()),
                     },
             }
         }
     }
 
-    fn follow_tran(&mut self, tran: &Tran<S, TL>, visited: &mut HashSet<TransBodyLock<S, TL>>) {
-        match tran {
-            Tran::Direct(body) => {
-                self.follow_tran_body(body);
-            },
-            Tran::Shared(lock) => {
-                if !visited.insert(lock.clone()) { return; }
-                let body = lock.borrow();
-                self.follow_tran_body(&*body);
-            },
-        }
-    }
-
-    fn follow_tran_body(&mut self, body: &TranBody<S, TL>) {
-        self.add_right_state(&body.right_states.0);
-        for right_state in body.right_states.1.iter() {
-            self.add_right_state(right_state);
-        }
-        body.transaction_listener.run();
-    }
-
-    fn add_right_state(&mut self, any_state_lock: &AnyStateLock<S, TL>) {
+    fn add_right_state(&mut self, any_state_lock: &AnyStateLock<S, TT>) {
         match any_state_lock {
             AnyStateLock::Normal(state_lock) => {
                 let state = state_lock.borrow();
@@ -348,19 +347,16 @@ mod tests {
     use super::*;
     use crate::lock::{RcRefCellSelector, RcRefCell};
 
-    struct RcTranListener {
-        id: u8,
-        ids: RcRefCell<HashSet<u8>>,
-    }
+    struct TestTranListener (HashSet<u8>);
 
-    impl TranListener for RcTranListener {
-        fn run(&self) {
-            self.ids.borrow_mut().insert(self.id);
+    impl TranListener<u8> for TestTranListener {
+        fn trigger(&mut self, tran_trigger: &u8) {
+            self.0.insert(*tran_trigger);
         }
     }
 
-    type RcState = RcRefCell<State<RcRefCellSelector, RcTranListener>>;
-    type RcTran = Tran<RcRefCellSelector, RcTranListener>;
+    type RcState = RcRefCell<State<RcRefCellSelector, u8>>;
+    type RcTran = Tran<RcRefCellSelector, u8>;
 
     fn new_state() -> RcState {
         let result = RcRefCell::new(State {
@@ -371,14 +367,14 @@ mod tests {
         result
     }
 
-    fn new_tran(states: Vec<RcState>, tl: RcTranListener) -> RcTran {
+    fn new_tran(states: Vec<RcState>, tt: u8) -> RcTran {
         let mut states = states.into_iter().map(AnyStateLock::Normal);
         Tran::Direct(TranBody {
             right_states: Succ(
                 states.next().unwrap(),
                 states.collect::<Vec<_>>().into_boxed_slice(),
             ),
-            transaction_listener: tl,
+            tran_trigger: tt,
         })
     }
 
@@ -398,9 +394,6 @@ mod tests {
 
     #[test]
     fn explicit_works() {
-        let trans_ids: RcRefCell<HashSet<u8>> = RcRefCell::new(HashSet::new());
-        let qs = vec![new_state(), new_state(), new_state(), new_state()];
-
         let (a, b, c) = (0, 1, 2);
 
         let a01 = 0;
@@ -408,25 +401,27 @@ mod tests {
         let c203 = 2;
         let b30 = 3;
 
-        for (left, c, rights, tl) in [
+        let qs = vec![new_state(), new_state(), new_state(), new_state()];
+        for (left, c, rights, tt) in [
             (0, a, vec![1], a01),
             (1, b, vec![2], b12),
             (2, c, vec![0, 3], c203),
             (3, b, vec![0], b30)
         ] {
             let rights = rights.into_iter().map(|i| qs[i].clone()).collect::<Vec<_>>();
-            let tran = new_tran(rights, RcTranListener{ id: tl, ids: trans_ids.clone() });
+            let tran = new_tran(rights, tt);
             set_explicit(&qs[left], vec![(Explicit::Char(c), tran)]);
         }
 
-        let mut automaton = Listeners::<RcRefCellSelector, RcTranListener>::new(
+        let mut automaton = Listeners::<RcRefCellSelector, u8>::new(
             vec![AnyStateLock::Normal(qs[0].clone())]
         );
+        let mut tl = TestTranListener(HashSet::new());
         let mut read_and_check_trans = |sym: u8, expected: Vec<u8>| {
-            trans_ids.borrow_mut().clear();
-            automaton.read(Explicit::Char(sym));
+            tl.0.clear();
+            automaton.read(Explicit::Char(sym), &mut tl);
             let expected = expected.into_iter().collect::<HashSet<_>>();
-            assert_eq!(*trans_ids.borrow(), expected);
+            assert_eq!(tl.0, expected);
         };
 
         // 0--- 0--a-->1
@@ -455,7 +450,6 @@ mod tests {
 
     #[test]
     fn pattern_works() {
-        let trans_ids: RcRefCell<HashSet<u8>> = RcRefCell::new(HashSet::new());
         let qs = vec![new_state(), new_state(), new_state(), new_state()];
 
         let (a, b, c) = (0, 1, 2);
@@ -467,14 +461,14 @@ mod tests {
         let any03 = 4;
         let nb33 = 5;
 
-        for (left, c, rights, tl) in [
+        for (left, c, rights, tt) in [
             (0, a, vec![1], a01),
             (1, b, vec![2], b12),
             (2, c, vec![0, 3], c203),
             (3, b, vec![0], b30)
         ] {
             let rights = rights.into_iter().map(|i| qs[i].clone()).collect::<Vec<_>>();
-            let tran = new_tran(rights, RcTranListener{ id: tl, ids: trans_ids.clone() });
+            let tran = new_tran(rights, tt);
             set_explicit(&qs[left], vec![(Explicit::Char(c), tran)]);
         }
 
@@ -484,23 +478,24 @@ mod tests {
         ];
         let (any, nb) = (0, 1);
 
-        for (left, pat, rights, tl) in [
+        for (left, pat, rights, tt) in [
             (0, any, vec![3], any03),
             (3, nb, vec![3], nb33),
         ] {
             let rights = rights.into_iter().map(|i| qs[i].clone()).collect::<Vec<_>>();
-            let tran = new_tran(rights, RcTranListener{ id: tl, ids: trans_ids.clone() });
+            let tran = new_tran(rights, tt);
             set_pattern(&qs[left], vec![(pats[pat].clone(), tran)]);
         }
 
-        let mut automaton = Listeners::<RcRefCellSelector, RcTranListener>::new(
+        let mut automaton = Listeners::<RcRefCellSelector, u8>::new(
             vec![AnyStateLock::Normal(qs[0].clone())]
         );
+        let mut tl = TestTranListener(HashSet::new());
         let mut read_and_check_trans = |sym: u8, expected: Vec<u8>| {
-            trans_ids.borrow_mut().clear();
-            automaton.read(Explicit::Char(sym));
+            tl.0.clear();
+            automaton.read(Explicit::Char(sym), &mut tl);
             let expected = expected.into_iter().collect::<HashSet<_>>();
-            assert_eq!(*trans_ids.borrow(), expected);
+            assert_eq!(tl.0, expected);
         };
 
         // 0--- 0--a-->1 0-any->3
