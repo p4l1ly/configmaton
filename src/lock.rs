@@ -1,4 +1,5 @@
 use std::cell::{RefCell, Ref, RefMut};
+use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -7,7 +8,7 @@ pub trait LockSuper {
     type GuardMut<'a, X: 'a>: DerefMut<Target = X>;
 }
 
-pub trait Lock<T>: LockSuper + Clone + From<T> {
+pub trait Lock<T>: LockSuper + Clone + From<T> + Hash + Eq + std::fmt::Debug {
     fn borrow(&self) -> Self::Guard<'_, T>;
     fn borrow_mut(&self) -> Self::GuardMut<'_, T>;
 }
@@ -100,6 +101,26 @@ impl<T> LockSuper for ArcMutex<T> {
     type GuardMut<'a, X: 'a> = MutexGuard<'a, X>;
 }
 
+impl<T> std::hash::Hash for ArcMutex<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(&*self.0, state);
+    }
+}
+
+impl<T> std::fmt::Debug for ArcMutex<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ArcMutex({:?})", self.0.as_ref() as *const _)
+    }
+}
+
+impl<T> PartialEq for ArcMutex<T> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(&*self.0, &*other.0)
+    }
+}
+
+impl<T> Eq for ArcMutex<T> { }
+
 impl<T> Lock<T> for ArcMutex<T> {
     fn borrow(&self) -> MutexGuard<'_, T> {
         self.0.lock().unwrap()
@@ -131,6 +152,26 @@ impl<T> From<T> for RawPtr<T> {
         RawPtr(Box::into_raw(Box::new(x)))
     }
 }
+
+impl<T> std::fmt::Debug for RawPtr<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RawPtr({:?})", self.0)
+    }
+}
+
+impl<T> std::hash::Hash for RawPtr<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.0, state);
+    }
+}
+
+impl<T> PartialEq for RawPtr<T> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl<T> Eq for RawPtr<T> { }
 
 impl<T> LockSuper for RawPtr<T> {
     type Guard<'a, X: 'a> = &'a X;

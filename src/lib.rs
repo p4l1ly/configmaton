@@ -7,6 +7,7 @@ pub mod lock;
 pub mod command;
 pub mod commands;
 pub mod automaton;
+pub mod keyval_simulator;
 pub mod config_parser;
 
 use crate::lock::{LockSelector, Lock};

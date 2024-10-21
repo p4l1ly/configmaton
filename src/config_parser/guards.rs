@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 pub trait Monoid {
     fn empty() -> Self;

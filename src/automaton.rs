@@ -1,4 +1,5 @@
-use std::{collections::{hash_map::Entry, HashMap, HashSet}, hash::Hash, mem::MaybeUninit};
+use hashbrown::{HashMap, HashSet, hash_map::Entry};
+use std::{hash::Hash, mem::MaybeUninit};
 use std::ptr::addr_of_mut;
 
 use crate::lock::{LockSelector, Lock};
@@ -159,9 +160,6 @@ pub struct Listeners<S: LockSelector, TT> {
 }
 
 impl<S: LockSelector, TT> Listeners<S, TT>
-where
-    StateLock<S, TT>: Hash + Eq + std::fmt::Debug,
-    TransBodyLock<S, TT>: Hash + Eq + std::fmt::Debug,
 {
     // Initialize the state of the automaton.
     pub fn new<I: IntoIterator<Item = AnyStateLock<S, TT>>>(initial_states: I) -> Self
