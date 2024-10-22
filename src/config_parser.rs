@@ -18,7 +18,7 @@ pub enum Ext {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TargetIx (usize);
+pub struct TargetIx (pub usize);
 impl TargetIx {
     fn target_offset(&self, offset: usize) -> TargetIx {
         TargetIx(self.0 + offset)
@@ -26,44 +26,33 @@ impl TargetIx {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct StateIx (usize);
+pub struct StateIx (pub usize);
 #[derive(Debug, Clone, Copy)]
-struct DfaIx (usize);
+pub struct DfaIx (pub usize);
 
 #[derive(Debug)]
 pub struct Target {
-    exts: Vec<Ext>,
-    states: Vec<StateIx>,
-}
-
-#[derive(Debug)]
-pub struct Old {
-    key: String,
-
-    // The following fields are for determinisation purposes.
-    dfa: DfaIx,
-    then: TargetIx,
-    waiter: StateIx,
+    pub exts: Vec<Ext>,
+    pub states: Vec<StateIx>,
 }
 
 #[derive(Debug)]
 pub enum Guard {
-    Old(Old),
-    New(String),
+    Var(String),
     EndVar,
     Guard(guards::Guard),
 }
 
 #[derive(Debug)]
-struct State {
-    transitions: Vec<(Guard, TargetIx)>,
+pub struct State {
+    pub transitions: Vec<(Guard, TargetIx)>,
 }
 
 pub struct Parser {
-    states: Vec<State>,
-    targets: Vec<Target>,
-    dfas: Vec<dfa::Dfa>,
-    regexes: HashMap<String, DfaIx>,
+    pub states: Vec<State>,
+    pub targets: Vec<Target>,
+    pub dfas: Vec<dfa::Dfa>,
+    pub regexes: HashMap<String, DfaIx>,
 }
 
 impl Parser {
@@ -120,11 +109,10 @@ impl Parser {
         let state0_ix = self.states.len();
         let target0_ix = TargetIx(self.targets.len());
 
-        let get_checker_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3) };
-        let get_waiter_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3 + 1) };
+        let get_waiter_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3) };
         let get_closer_state_ix = |i: usize| -> StateIx {
             assert!(i < match_.when.len() - 1);
-            StateIx(state0_ix + i * 3 + 2)
+            StateIx(state0_ix + i * 3 + 1)
         };
         let get_checker_target_ix = |i: usize| -> TargetIx {
             assert!(i != 0);
@@ -145,54 +133,58 @@ impl Parser {
         };
 
         if match_.when.len() == 1 {
-            self.states.push(State { transitions: vec![] });  // checker
-            self.states.push(State { transitions: vec![] });  // waiter
-            self.targets.push(Target {  // waiter
+            // waiter
+            self.targets.push(Target {
                 exts: vec![],
-                states: vec![get_waiter_state_ix(0)],
+                states: vec![StateIx(self.states.len())],
             });
-        } else {
-            self.states.push(State { transitions: vec![] });  // checker
-            self.states.push(State { transitions: vec![] });  // waiter
-            self.targets.push(Target {  // waiter
-                exts: vec![],
-                states: vec![get_waiter_state_ix(0)],
-            });
-            // closer (nonexistent for the last guard)
             self.states.push(State { transitions: vec![] });
+        } else {
+            // waiter
+            self.targets.push(Target {  // waiter
+                exts: vec![],
+                states: vec![StateIx(self.states.len())],
+            });
+            self.states.push(State { transitions: vec![] });
+
+            // closer (nonexistent for the last guard)
             self.targets.push(Target {
                 exts: vec![Ext::GetOld(match_.when[0].0.clone())],
-                states: vec![get_closer_state_ix(0)],
+                states: vec![StateIx(self.states.len())],
             });
-            for (i, (key, _)) in match_.when[..match_.when.len() - 1].iter().enumerate().skip(1) {
-                self.states.push(State { transitions: vec![] });  // checker
+            self.states.push(State { transitions: vec![] });
+
+            for (key, _) in match_.when[..match_.when.len() - 1].iter().skip(1) {
+                // waiter
                 self.targets.push(Target {
                     exts: vec![Ext::GetOld(key.clone())],
-                    states: vec![get_checker_state_ix(i)],
+                    states: vec![StateIx(self.states.len())],
                 });
-                self.states.push(State { transitions: vec![] });  // waiter
-                self.targets.push(Target {  // waiter
+                self.targets.push(Target {
                     exts: vec![],
-                    states: vec![get_waiter_state_ix(i)],
+                    states: vec![StateIx(self.states.len())],
                 });
-                // closer (nonexistent for the last guard)
                 self.states.push(State { transitions: vec![] });
+
+                // closer (nonexistent for the last guard)
                 self.targets.push(Target {
                     exts: vec![Ext::GetOld(key.clone())],
-                    states: vec![get_closer_state_ix(i)],
+                    states: vec![StateIx(self.states.len())],
                 });
+                self.states.push(State { transitions: vec![] });
             }
+
+            // waiter
             let i = match_.when.len() - 1;
-            self.states.push(State { transitions: vec![] });  // checker
-            self.targets.push(Target {  // checker
+            self.targets.push(Target {
                 exts: vec![Ext::GetOld(match_.when[i].0.clone())],
-                states: vec![get_checker_state_ix(i)],
+                states: vec![StateIx(self.states.len())],
             });
-            self.states.push(State { transitions: vec![] });  // waiter
-            self.targets.push(Target {  // waiter
+            self.targets.push(Target {
                 exts: vec![],
-                states: vec![get_waiter_state_ix(i)],
+                states: vec![StateIx(self.states.len())],
             });
+            self.states.push(State { transitions: vec![] });
         }
 
         let mut copy_dfa = |
@@ -233,12 +225,7 @@ impl Parser {
             let dfa_target0_ix = copy_dfa(
                 &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
 
-            let guard = Guard::Old(Old {
-                key: key.clone(),
-                dfa: *dfa_ix,
-                then: then_ix,
-                waiter: get_waiter_state_ix(i),
-            });
+            let guard = Guard::Var(key.clone());
             self.states[get_closer_state_ix(i).0].transitions.push((guard, dfa_target0_ix));
 
             then_ix = get_closer_target_ix(i);
@@ -250,17 +237,8 @@ impl Parser {
             let dfa_target0_ix = copy_dfa(
                 &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
 
-            let guard = Guard::Old(Old {
-                key: key.clone(),
-                dfa: *dfa_ix,
-                then: then_ix,
-                waiter: get_waiter_state_ix(i),
-            });
-            self.states[get_checker_state_ix(i).0].transitions.push(
-                (guard, dfa_target0_ix));
-
             self.states[get_waiter_state_ix(i).0].transitions.push(
-                (Guard::New(key.clone()), dfa_target0_ix));
+                (Guard::Var(key.clone()), dfa_target0_ix));
 
             if i != 0 {
                 then_ix = get_checker_target_ix(i);
@@ -300,8 +278,7 @@ impl Parser {
 
         let fmtg = |guard: &Guard| -> String {
             match guard {
-                Guard::Old(s) => format!("Old({})", s.key),
-                Guard::New(s) => format!("New({})", s),
+                Guard::Var(s) => format!("Var({})", s),
                 Guard::EndVar => "EndVar".to_string(),
                 Guard::Guard(g) => format!("{:?}", g),
             }.replace("\\", "\\\\").replace("\"", "\\\"")

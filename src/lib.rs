@@ -9,6 +9,7 @@ pub mod commands;
 pub mod automaton;
 pub mod keyval_simulator;
 pub mod config_parser;
+pub mod parser_to_simulator;
 
 use crate::lock::{LockSelector, Lock};
 use crate::command::{CommandBox, CommandTarget};
