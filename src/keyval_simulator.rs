@@ -13,6 +13,7 @@ pub enum Trigger {
 #[derive(Clone, Debug)]
 pub struct Triggers(pub Box<[Trigger]>);
 
+#[derive(Clone, Debug)]
 pub struct KeyValState {
     pub result: Vec<Value>,
     pub old_queries: IndexSet<String>,
@@ -64,6 +65,7 @@ impl<S: LockSelector> KeyValSimulator<S> {
         for c in val.chars() {
             self.listeners.read(Explicit::Char(c as u8), &mut tl);
         }
+        self.listeners.read(Explicit::EndVar, &mut tl);
         self.finish_read(tl, olds)
     }
 
@@ -77,6 +79,7 @@ impl<S: LockSelector> KeyValSimulator<S> {
                 for c in oldval.chars() {
                     self.listeners.read(Explicit::Char(c as u8), &mut tl);
                 }
+                self.listeners.read(Explicit::EndVar, &mut tl);
             }
         }
         tl.result

@@ -97,8 +97,8 @@ impl Parser {
         let mut then_ix = TargetIx(self.targets.len());
         self.targets.push(then);
 
-        let dfa_ixs = match_.when.iter().map(|(key, regex)| {
-            *self.regexes.entry(key.clone()).or_insert_with(|| {
+        let dfa_ixs = match_.when.iter().map(|(_, regex)| {
+            *self.regexes.entry(regex.clone()).or_insert_with(|| {
                 let dfa_ix = self.dfas.len();
                 self.dfas.push(
                     dfa::Dfa::from_nfa(nfa::Nfa::from_ast(ast::parse_regex(&regex)))

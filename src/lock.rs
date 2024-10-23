@@ -1,28 +1,50 @@
 use std::cell::{RefCell, Ref, RefMut};
 use std::hash::Hash;
+use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 pub trait LockSuper {
-    type Holder;
     type Guard<'a, X: 'a>: Deref<Target = X>;
     type GuardMut<'a, X: 'a>: DerefMut<Target = X>;
 }
 
 pub trait Lock<T>: LockSuper + Clone + From<T> + Hash + Eq + std::fmt::Debug {
-    fn new(x: T) -> Self::Holder;
-    fn refer(x: &mut Self::Holder) -> Self;
     fn borrow(&self) -> Self::Guard<'_, T>;
     fn borrow_mut(&self) -> Self::GuardMut<'_, T>;
 }
 
 pub trait LockSelector {
     type Lock<T>: Lock<T>;
+    type Holder<T>;
+
+    fn new<T>(x: T) -> Self::Holder<T>;
+    fn refer<T>(x: &mut Self::Holder<T>) -> Self::Lock<T>;
+    fn borrow_mut_holder<T>(x: &mut Self::Holder<T>)
+        -> <Self::Lock<T> as LockSuper>::GuardMut<'_, T>;
+    unsafe fn refer_uninit<T>(x: &mut Self::Holder<MaybeUninit<T>>) -> Self::Lock<T>;
 }
 
 pub struct RcRefCellSelector {}
 impl LockSelector for RcRefCellSelector {
     type Lock<T> = RcRefCell<T>;
+    type Holder<T> = RcRefCell<T>;
+
+    fn new<T>(x: T) -> Self::Holder<T> {
+        RcRefCell(std::rc::Rc::new(RefCell::new(x)))
+    }
+
+    fn refer<T>(x: &mut Self::Holder<T>) -> Self::Lock<T> {
+        x.clone()
+    }
+
+    unsafe fn refer_uninit<T>(x: &mut Self::Holder<MaybeUninit<T>>) -> Self::Lock<T> {
+        std::mem::transmute::<_, Self::Lock<T>>(x).clone()
+    }
+
+    fn borrow_mut_holder<T>(x: &mut Self::Holder<T>) -> RefMut<'_, T> {
+        x.0.borrow_mut()
+    }
 }
 
 pub struct RcRefCell<T>(std::rc::Rc<RefCell<T>>);
@@ -60,20 +82,11 @@ impl<T> From<T> for RcRefCell<T> {
 }
 
 impl<T> LockSuper for RcRefCell<T> {
-    type Holder = Self;
     type Guard<'a, X: 'a> = Ref<'a, X>;
     type GuardMut<'a, X: 'a> = RefMut<'a, X>;
 }
 
 impl<T> Lock<T> for RcRefCell<T> {
-    fn new(x: T) -> Self {
-        RcRefCell(std::rc::Rc::new(RefCell::new(x)))
-    }
-
-    fn refer(x: &mut Self) -> Self {
-        x.clone()
-    }
-
     fn borrow(&self) -> Ref<'_, T> {
         self.0.borrow()
     }
@@ -88,6 +101,23 @@ pub struct ArcMutex<T>(Arc<Mutex<T>>);
 pub struct ArcMutexSelector {}
 impl LockSelector for ArcMutexSelector {
     type Lock<T> = ArcMutex<T>;
+    type Holder<T> = ArcMutex<T>;
+
+    fn new<T>(x: T) -> Self::Holder<T> {
+        ArcMutex(Arc::new(Mutex::new(x)))
+    }
+
+    fn refer<T>(x: &mut Self::Holder<T>) -> Self::Lock<T> {
+        x.clone()
+    }
+
+    unsafe fn refer_uninit<T>(x: &mut Self::Holder<MaybeUninit<T>>) -> Self::Lock<T> {
+        std::mem::transmute::<_, Self::Lock<T>>(x).clone()
+    }
+
+    fn borrow_mut_holder<T>(x: &mut Self::Holder<T>) -> MutexGuard<'_, T> {
+        x.0.lock().unwrap()
+    }
 }
 
 impl<T> From<T> for ArcMutex<T> {
@@ -103,7 +133,6 @@ impl<T> Clone for ArcMutex<T> {
 }
 
 impl<T> LockSuper for ArcMutex<T> {
-    type Holder = Self;
     type Guard<'a, X: 'a> = MutexGuard<'a, X>;
     type GuardMut<'a, X: 'a> = MutexGuard<'a, X>;
 }
@@ -129,14 +158,6 @@ impl<T> PartialEq for ArcMutex<T> {
 impl<T> Eq for ArcMutex<T> { }
 
 impl<T> Lock<T> for ArcMutex<T> {
-    fn new(x: T) -> Self {
-        ArcMutex(Arc::new(Mutex::new(x)))
-    }
-
-    fn refer(x: &mut Self) -> Self {
-        x.clone()
-    }
-
     fn borrow(&self) -> MutexGuard<'_, T> {
         self.0.lock().unwrap()
     }
@@ -154,6 +175,23 @@ pub struct RawPtr<T>(*mut T);
 pub struct RawPtrSelector {}
 impl LockSelector for RawPtrSelector {
     type Lock<T> = RawPtr<T>;
+    type Holder<T> = T;
+
+    fn new<T>(x: T) -> Self::Holder<T> {
+        x
+    }
+
+    fn refer<T>(x: &mut Self::Holder<T>) -> Self::Lock<T> {
+        RawPtr(x)
+    }
+
+    unsafe fn refer_uninit<T>(x: &mut Self::Holder<MaybeUninit<T>>) -> Self::Lock<T> {
+        RawPtr(x.as_mut_ptr())
+    }
+
+    fn borrow_mut_holder<T>(x: &mut T) -> &mut T {
+        x
+    }
 }
 
 impl<T> Clone for RawPtr<T> {
@@ -189,20 +227,11 @@ impl<T> PartialEq for RawPtr<T> {
 impl<T> Eq for RawPtr<T> { }
 
 impl<T> LockSuper for RawPtr<T> {
-    type Holder = T;
     type Guard<'a, X: 'a> = &'a X;
     type GuardMut<'a, X: 'a> = &'a mut X;
 }
 
 impl<T> Lock<T> for RawPtr<T> {
-    fn new(x: T) -> T {
-        x
-    }
-
-    fn refer(x: &mut T) -> Self {
-        RawPtr(x)
-    }
-
     fn borrow(&self) -> &T {
         unsafe { &*self.0 }
     }

@@ -202,8 +202,6 @@ impl<S: LockSelector, TT> Listeners<S, TT>
 
     // Read a symbol, perform transitions.
     pub fn read<TL: TranListener<TT>>(&mut self, explicit: Explicit, tl: &mut TL) {
-        dbg!(&explicit, &self.explicit_listeners, &self.pattern_listeners);
-
         // Prepare the results.
         let mut all_old_states = std::mem::take(self.explicit_listeners.get_mut(&explicit));
         let mut any_pattern = false;
@@ -220,8 +218,6 @@ impl<S: LockSelector, TT> Listeners<S, TT>
 
         let self_handling_sparse_states = std::mem::take(&mut self.self_handling_sparse_states);
         let self_handling_dense_states = std::mem::take(&mut self.self_handling_dense_states);
-
-        dbg!(&all_old_states);
 
         // First, let's remove all listeners for transitions of the old states
         for left_state_lock in all_old_states.iter() {
@@ -377,11 +373,10 @@ mod tests {
     type RcTran = Tran<RcRefCellSelector, u8>;
 
     fn new_state() -> RcState {
-        let result = RcRefCell::new(State {
+        let result = RcRefCellSelector::new(State {
             explicit_trans: Box::new([]),
             pattern_trans: Box::new([]),
         });
-        dbg!(&result);
         result
     }
 

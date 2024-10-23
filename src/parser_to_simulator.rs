@@ -4,19 +4,18 @@ use crate::config_parser as inp;
 use crate::config_parser::TargetIx;
 use crate::automaton as out;
 use crate::keyval_simulator as outsim;
-use crate::lock::{LockSuper, LockSelector, Lock as _};
+use crate::lock::LockSelector;
 
 type TT = outsim::Triggers;
-type Lock<S, X> = <S as LockSelector>::Lock<X>;
-type StateLock<S> = Lock<S, out::State<out::Tran<S, TT>>>;
-type SelfHandlingSparseStateLock<S> = Lock<S, out::SelfHandlingSparseState<out::Tran<S, TT>>>;
-type SelfHandlingDenseStateLock<S> = Lock<S, out::SelfHandlingDenseState<out::Tran<S, TT>>>;
-type TranBodyLock<S> = Lock<S, out::TranBody<S, TT>>;
+type State<S> = out::State<out::Tran<S, TT>>;
+type SelfHandlingSparseState<S> = out::SelfHandlingSparseState<out::Tran<S, TT>>;
+type SelfHandlingDenseState<S> = out::SelfHandlingDenseState<out::Tran<S, TT>>;
 
-type Holder<S, X> = <Lock<S, X> as LockSuper>::Holder;
-type StateHolder<S> = Holder<S, out::State<out::Tran<S, TT>>>;
-type SelfHandlingSparseStateHolder<S> = Holder<S, out::SelfHandlingSparseState<out::Tran<S, TT>>>;
-type SelfHandlingDenseStateHolder<S> = Holder<S, out::SelfHandlingDenseState<out::Tran<S, TT>>>;
+type UninitHolder<S, X> = <S as LockSelector>::Holder<MaybeUninit<X>>;
+type Holder<S, X> = <S as LockSelector>::Holder<X>;
+type StateHolder<S> = Holder<S, State<S>>;
+type SelfHandlingSparseStateHolder<S> = Holder<S, SelfHandlingSparseState<S>>;
+type SelfHandlingDenseStateHolder<S> = Holder<S, SelfHandlingDenseState<S>>;
 type TranBodyHolder<S> = Holder<S, out::TranBody<S, TT>>;
 
 
@@ -78,21 +77,13 @@ pub fn worth_sharing_target(target: &inp::Target, refcount: usize) -> bool {
     refcount >= 2 && (!target.exts.is_empty() || target.states.len() > 2)
 }
 
-pub fn vec_with_fn<T>(f: impl Fn() -> T, len: usize) -> Vec<T> {
+pub fn uninit_vec<S: LockSelector, X, Y>(v: &Vec<X>) -> Vec<UninitHolder<S, Y>> {
+    let len = v.len();
     let mut v = Vec::with_capacity(len);
     for _ in 0..len {
-        v.push(f());
+        v.push(<S as LockSelector>::new(MaybeUninit::uninit()));
     }
     v
-}
-
-
-pub fn uninit_vec<X, Y>(v: &Vec<X>) -> Vec<MaybeUninit<Y>> {
-    vec_with_fn(MaybeUninit::uninit, v.len())
-}
-
-pub fn uninit_ptr<X>(x: &mut MaybeUninit<X>) -> *mut X {
-    x.as_mut_ptr()
 }
 
 pub fn clone_tran<S: LockSelector>(tran: &out::Tran<S, TT>) -> out::Tran<S, TT> {
@@ -136,15 +127,20 @@ pub fn parser_to_simulator<S: LockSelector>
         }
     }).collect::<Vec<_>>();
 
-    let mut holder = unsafe {
-        let mut normal_states: Vec<MaybeUninit<StateHolder<S>>> =
-            uninit_vec(&normal_states0);
-        let mut self_handling_sparse_states: Vec<MaybeUninit<SelfHandlingSparseStateHolder<S>>> =
-            uninit_vec(&self_handling_sparse_states0);
-        let mut self_handling_dense_states: Vec<MaybeUninit<SelfHandlingDenseStateHolder<S>>> =
-            uninit_vec(&self_handling_dense_states0);
+    let mut normal_states =
+        uninit_vec::<S, _, State<S>>(&normal_states0);
 
-        let mut shared_trans: Vec<TranBodyHolder<S>> = vec![];
+    for outq in normal_states.iter_mut() {
+        <S as LockSelector>::borrow_mut_holder(outq);
+    }
+
+    let mut self_handling_sparse_states =
+        uninit_vec::<S, _, SelfHandlingSparseState<S>>(&self_handling_sparse_states0);
+    let mut self_handling_dense_states =
+        uninit_vec::<S, _, SelfHandlingDenseState<S>>(&self_handling_dense_states0);
+    let mut shared_trans: Vec<TranBodyHolder<S>> = vec![];
+
+    let mut holder = unsafe {
         let targetmap = parsaut.targets.iter().zip(target_refcounts.into_iter()).map(
             |(target, refcount)|
             {
@@ -161,25 +157,29 @@ pub fn parser_to_simulator<S: LockSelector>
                         let mut any_state_locks = target.states.iter().map(|state| {
                             match parseaut_statemap[state.0] {
                                 OutStateIx::Normal(ix) => out::AnyStateLock::Normal(
-                                    <StateLock<S>>::refer(&mut *normal_states[ix].as_mut_ptr())),
+                                    <S as LockSelector>::refer_uninit(
+                                        &mut normal_states[ix])),
                                 OutStateIx::SelfHandlingSparse(ix) => out::AnyStateLock::Sparse(
-                                    <SelfHandlingSparseStateLock<S>>::refer(
-                                        &mut *self_handling_sparse_states[ix].as_mut_ptr())),
+                                    <S as LockSelector>::refer_uninit(
+                                        &mut self_handling_sparse_states[ix])),
                                 OutStateIx::SelfHandlingDense(ix) => out::AnyStateLock::Dense(
-                                    <SelfHandlingDenseStateLock<S>>::refer(
-                                        &mut *self_handling_dense_states[ix].as_mut_ptr())),
+                                    <S as LockSelector>::refer_uninit(
+                                        &mut self_handling_dense_states[ix])),
                             }
                         });
                         out::Succ(
-                            match any_state_locks.next() { Some(x) => x, None => out::AnyStateLock::None }, 
+                            match any_state_locks.next() {
+                                Some(x) => x,
+                                None => out::AnyStateLock::None
+                            }, 
                             any_state_locks.collect::<Vec<_>>().into_boxed_slice(),
                         )
                     }
                 };
                 if worth_sharing_target(target, refcount) {
                     let ix = shared_trans.len();
-                    shared_trans.push(<TranBodyLock<S>>::new(tranbody));
-                    out::Tran::Shared(<TranBodyLock<S>>::refer(&mut shared_trans[ix]))
+                    shared_trans.push(<S as LockSelector>::new(tranbody));
+                    out::Tran::Shared(<S as LockSelector>::refer(&mut shared_trans[ix]))
                 } else {
                     out::Tran::Owned(tranbody)
                 }
@@ -187,23 +187,24 @@ pub fn parser_to_simulator<S: LockSelector>
         ).collect::<Vec<_>>();
 
         for (outq, inq) in normal_states.iter_mut().zip(normal_states0.into_iter()) {
-            outq.write(<StateLock<S>>::new(inq.map(|tran_ix| clone_tran(&targetmap[tran_ix.0]))));
+            let inq2 = inq.map(|tran_ix| clone_tran(&targetmap[tran_ix.0]));
+            <S as LockSelector>::borrow_mut_holder(outq).write(inq2);
         }
 
         for (outq, inq) in
             self_handling_sparse_states.iter_mut()
             .zip(self_handling_sparse_states0.into_iter())
         {
-            outq.write(<SelfHandlingSparseStateLock<S>>::new(
-                inq.map(|tran_ix| clone_tran(&targetmap[tran_ix.0]))));
+            let inq2 = inq.map(|tran_ix| clone_tran(&targetmap[tran_ix.0]));
+            <S as LockSelector>::borrow_mut_holder(outq).write(inq2);
         }
 
         for (outq, inq) in
             self_handling_dense_states.iter_mut()
             .zip(self_handling_dense_states0.into_iter())
         {
-            outq.write(<SelfHandlingDenseStateLock<S>>::new(
-                inq.map(|tran_ix| clone_tran(&targetmap[tran_ix.0]))));
+            let inq2 = inq.map(|tran_ix| clone_tran(&targetmap[tran_ix.0]));
+            <S as LockSelector>::borrow_mut_holder(outq).write(inq2);
         }
 
         AutHolder {
@@ -229,11 +230,11 @@ pub fn parser_to_simulator<S: LockSelector>
     let init_states = init.states.iter().map(|state| {
         match parseaut_statemap[state.0] {
             OutStateIx::Normal(ix) => out::AnyStateLock::Normal(
-                <StateLock<S>>::refer(&mut holder.normal_states[ix])),
+                <S as LockSelector>::refer(&mut holder.normal_states[ix])),
             OutStateIx::SelfHandlingSparse(ix) => out::AnyStateLock::Sparse(
-                <SelfHandlingSparseStateLock<S>>::refer(&mut holder.self_handling_sparse_states[ix])),
+                <S as LockSelector>::refer(&mut holder.self_handling_sparse_states[ix])),
             OutStateIx::SelfHandlingDense(ix) => out::AnyStateLock::Dense(
-                <SelfHandlingDenseStateLock<S>>::refer(&mut holder.self_handling_dense_states[ix])),
+                <S as LockSelector>::refer(&mut holder.self_handling_dense_states[ix])),
         }
     });
 
@@ -247,10 +248,10 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::lock::RcRefCellSelector;
+    use crate::lock::RawPtrSelector;  // WARNING RcRefCellSelector does not work with MaybeUninit.
 
     #[test]
-    fn config_to_automaton_complex() {
+    fn complex() {
         // read and parse file tests/config.json
         let config: Vec<inp::Cmd> = serde_json::from_str(r#"[
             {
@@ -278,14 +279,14 @@ mod tests {
 
         let (parser, init) = inp::Parser::parse(config);
         let (_holder, mut simulator, keyval_state) =
-            parser_to_simulator::<RcRefCellSelector>(parser, init);
+            parser_to_simulator::<RawPtrSelector>(parser, init);
 
-        // let exts = simulator.finish_read(keyval_state, |_| Some("baz"));
-        // assert_eq!(exts, Vec::<Value>::new());
+        let exts = simulator.finish_read(keyval_state, |_| Some("baz"));
+        assert_eq!(exts, vec![serde_json::json!({"set": {"match2":"passed"}})]);
     }
 
     #[test]
-    fn config_to_automaton_simple() {
+    fn simple() {
         // read and parse file tests/config.json
         let config: Vec<inp::Cmd> = serde_json::from_str(r#"[
             { 
@@ -299,6 +300,9 @@ mod tests {
 
         let (parser, init) = inp::Parser::parse(config);
         let (_holder, mut simulator, keyval_state) =
-            parser_to_simulator::<RcRefCellSelector>(parser, init);
+            parser_to_simulator::<RawPtrSelector>(parser, init);
+
+        let exts = simulator.finish_read(keyval_state, |_| Some("baz"));
+        assert_eq!(exts, Vec::<Value>::new());
     }
 }
