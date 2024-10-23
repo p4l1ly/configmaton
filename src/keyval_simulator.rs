@@ -2,7 +2,7 @@ use indexmap::IndexSet;
 
 use serde_json::Value;
 
-use crate::{automaton::{Explicit, Listeners, TranListener, AnyStateLock}, lock::LockSelector};
+use crate::automaton::{Explicit, Listeners, TranListener, AnyStateLock};
 
 #[derive(Clone, Debug)]
 pub enum Trigger {
@@ -45,19 +45,19 @@ pub trait Database {
     fn read(&self, key: String) -> Option<String>;
 }
 
-pub struct KeyValSimulator<S: LockSelector> {
-    listeners: Listeners<S, Triggers>
+pub struct KeyValSimulator<'a> {
+    listeners: Listeners<'a, Triggers>
 }
 
-impl<S: LockSelector> KeyValSimulator<S> {
-    pub fn new<I: IntoIterator<Item = AnyStateLock<S, Triggers>>>(initial_states: I) -> Self {
+impl<'a> KeyValSimulator<'a> {
+    pub fn new<I: IntoIterator<Item = AnyStateLock<'a, Triggers>>>(initial_states: I) -> Self {
         KeyValSimulator { listeners: Listeners::new(initial_states) }
     }
 }
 
-impl<S: LockSelector> KeyValSimulator<S> {
-    pub fn read<'a, F: Fn(&str) -> Option<&'a str>>
-        (&'a mut self, key: String, val: &'a str, olds: F)
+impl<'a> KeyValSimulator<'a> {
+    pub fn read<'b, F: Fn(&str) -> Option<&'b str>>
+        (&'b mut self, key: String, val: &'b str, olds: F)
         -> Vec<Value>
     {
         let mut tl = KeyValState { result: vec![], old_queries: IndexSet::new() };
@@ -69,7 +69,7 @@ impl<S: LockSelector> KeyValSimulator<S> {
         self.finish_read(tl, olds)
     }
 
-    pub fn finish_read<'a, F: Fn(&str) -> Option<&'a str>>
+    pub fn finish_read<'b, F: Fn(&str) -> Option<&'b str>>
         (&mut self, mut tl: KeyValState, olds: F)
         -> Vec<Value>
     {
