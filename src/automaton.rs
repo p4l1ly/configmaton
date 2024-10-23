@@ -98,19 +98,11 @@ impl<T> SelfHandlingSparseState<T> {
     }
 }
 
-pub struct SelfHandlingDenseState<T> {
-    pub char_trans: [T; 256],
-    pub endvar_tran: T,
-    pub var_trans: HashMap<String, T>,
-}
+pub struct SelfHandlingDenseState<T>(pub [Option<T>; 257]);
 
 impl<T> SelfHandlingDenseState<T> {
-    pub fn map<T2, F: FnMut(T) -> T2>(self, mut f: F) -> SelfHandlingDenseState<T2> {
-        SelfHandlingDenseState {
-            char_trans: self.char_trans.map(|x| f(x)),
-            endvar_tran: f(self.endvar_tran),
-            var_trans: self.var_trans.into_iter().map(|(k, v)| (k, f(v))).collect(),
-        }
+    pub fn map<T2, F: FnMut(T) -> T2 + Copy>(self, f: F) -> SelfHandlingDenseState<T2> {
+        SelfHandlingDenseState(self.0.map(|x| x.map(f)))
     }
 }
 
@@ -331,16 +323,14 @@ impl<'a, TT> Listeners<'a, TT>
 
         for state_lock in self_handling_dense_states.into_iter() {
             let state = state_lock.0;
-            match &explicit {
-                Explicit::Char(c) =>
-                    follow_tran(self, &state.char_trans[*c as usize]),
-                Explicit::EndVar =>
-                    follow_tran(self, &state.endvar_tran),
-                Explicit::Var(s) =>
-                    match state.var_trans.get(s) {
-                        Some(tran) => follow_tran(self, tran),
-                        None => self.self_handling_dense_states.push(state_lock.clone()),
-                    },
+            let mtran = match &explicit {
+                Explicit::Char(c) => &state.0[*c as usize],
+                Explicit::EndVar => &state.0[256],
+                _ => panic!("Var-Chars alternation violation"),
+            };
+            match mtran {
+                Some(x) => follow_tran(self, x),
+                None => self.self_handling_dense_states.push(state_lock.clone()),
             }
         }
     }

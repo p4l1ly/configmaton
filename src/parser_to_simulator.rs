@@ -33,37 +33,106 @@ enum OutAnyState {
     SelfHandlingDense(out::SelfHandlingDenseState<TargetIx>),
 }
 
-fn convert_to_normal_state(state: &inp::State) -> OutAnyState {
-    let mut explicit_trans = vec![];
-    let mut pattern_trans = vec![];
+fn convert_to_normal_state<
+    const DENSE_GUARD_COUNT: usize,
+    const BIG_GUARD_SIZE: u32,
+    const SELFHANDLING_TRANS_COUNT: usize,
+>(state: &inp::State) -> OutAnyState {
+    let mut has_var = false;
+    let mut has_char = false;
+    let mut guard_count = 0;
 
-    for (guard, target) in state.transitions.iter() {
+    for (guard, _) in state.transitions.iter() {
         match guard {
-            inp::Guard::Var(key) =>
-                explicit_trans.push((out::Explicit::Var(key.clone()), *target)),
-            inp::Guard::EndVar =>
-                explicit_trans.push((out::Explicit::EndVar, *target)),
-            inp::Guard::Guard(guard) =>
-                pattern_trans.push((guard.clone(), *target)),
+            inp::Guard::Var(_) => {
+                has_var = true;
+                if has_char { panic!("Mixed Var-Chars") }
+            },
+            inp::Guard::EndVar => {
+                has_char = true;
+                if has_var { panic!("Mixed Var-Chars") }
+            }
+            inp::Guard::Guard(_) => {
+                guard_count += 1;
+                has_char = true;
+                if has_var { panic!("Mixed Var-Chars") }
+            }
         }
     }
 
-    if explicit_trans.len() + pattern_trans.len() < 15 {
-        OutAnyState::Normal(out::State{
-            explicit_trans: explicit_trans.into_boxed_slice(),
-            pattern_trans: pattern_trans.into_boxed_slice(),
-        })
-    } else if pattern_trans.len() < 10 && explicit_trans.len() < 50 {
-        OutAnyState::SelfHandlingSparse(out::SelfHandlingSparseState{
-            explicit_trans: explicit_trans.into_iter().collect(),
-            pattern_trans: pattern_trans.into_boxed_slice(),
-        })
-    } else {
-        OutAnyState::SelfHandlingDense(out::SelfHandlingDenseState{
-            char_trans: unimplemented!(),
-            var_trans: unimplemented!(),
-            endvar_tran: unimplemented!(),
-        })
+    if has_char && guard_count >= DENSE_GUARD_COUNT {
+        let mut trans: [Option<TargetIx>; 257] = [None; 257];
+        let mut add_tran = |c: usize, target: TargetIx| {
+            let x = &mut trans[c];
+            match *x {
+                Some(_) => panic!("Overlapping guards"),
+                None => *x = Some(target),
+            }
+        };
+
+        let mut guard_trans = vec![];
+        for (guard, target) in state.transitions.iter() {
+            match guard {
+                inp::Guard::Guard(guard) => guard_trans.push((guard, *target)),
+                inp::Guard::EndVar => add_tran(256, *target),
+                inp::Guard::Var(_) => unreachable!(),
+            }
+        }
+
+        let mut c = 0;
+        loop {
+            for (guard, target) in guard_trans.iter() {
+                if guard.contains(c) { add_tran(c as usize, *target); }
+            }
+            if c == 255 { break; }
+            c += 1;
+        }
+
+        OutAnyState::SelfHandlingDense(out::SelfHandlingDenseState(trans))
+    }
+    else {
+        let mut explicit_trans = vec![];
+        let mut pattern_trans = vec![];
+        let mut small_guard_trans = vec![];
+        for (guard, target) in state.transitions.iter() {
+            match guard {
+                inp::Guard::Var(key) =>
+                    explicit_trans.push((out::Explicit::Var(key.clone()), *target)),
+                inp::Guard::EndVar =>
+                    explicit_trans.push((out::Explicit::EndVar, *target)),
+                inp::Guard::Guard(guard) => {
+                    if guard.size() < BIG_GUARD_SIZE {
+                        small_guard_trans.push((guard, *target));
+                    } else {
+                        pattern_trans.push((guard.clone(), *target));
+                    }
+                },
+            }
+        }
+
+        if !small_guard_trans.is_empty() {
+            let mut c = 0;
+            loop {
+                for (guard, target) in small_guard_trans.iter() {
+                    if guard.contains(c)
+                        { explicit_trans.push((out::Explicit::Char(c), *target)); }
+                }
+                if c == 255 { break; }
+                c += 1;
+            }
+        }
+
+        if explicit_trans.len() + pattern_trans.len() < SELFHANDLING_TRANS_COUNT {
+            OutAnyState::Normal(out::State{
+                explicit_trans: explicit_trans.into_boxed_slice(),
+                pattern_trans: pattern_trans.into_boxed_slice(),
+            })
+        } else {
+            OutAnyState::SelfHandlingSparse(out::SelfHandlingSparseState{
+                explicit_trans: explicit_trans.into_iter().collect(),
+                pattern_trans: pattern_trans.into_boxed_slice(),
+            })
+        }
     }
 }
 
@@ -99,9 +168,13 @@ fn clone_tran<'a>(tran: &Tran<'a>) -> Tran<'a> {
     }
 }
 
-pub fn parser_to_simulator<'a>
-    (parsaut: inp::Parser, init: inp::Target)
-    -> (AutHolder<'a>, outsim::KeyValSimulator<'a>, outsim::KeyValState)
+pub fn parser_to_simulator<
+    'a,
+    const DENSE_GUARD_COUNT: usize,
+    const BIG_GUARD_SIZE: u32,
+    const SELFHANDLING_TRANS_COUNT: usize,
+>(parsaut: inp::Parser, init: inp::Target)
+-> (AutHolder<'a>, outsim::KeyValSimulator<'a>, outsim::KeyValState)
 {
     let mut normal_states0: Vec<out::State<TargetIx>> = vec![];
     let mut self_handling_sparse_states0: Vec<out::SelfHandlingSparseState<TargetIx>> = vec![];
@@ -113,7 +186,11 @@ pub fn parser_to_simulator<'a>
             target_refcounts[target.0] += 1;
         }
 
-        match convert_to_normal_state(state) {
+        match convert_to_normal_state::<
+            DENSE_GUARD_COUNT,
+            BIG_GUARD_SIZE,
+            SELFHANDLING_TRANS_COUNT,
+        >(state) {
             OutAnyState::Normal(state) => {
                 normal_states0.push(state);
                 OutStateIx::Normal(normal_states0.len() - 1)
@@ -241,9 +318,18 @@ pub fn parser_to_simulator<'a>
 
 #[cfg(test)]
 mod tests {
+    use hashbrown::HashSet;
     use serde_json::Value;
 
     use super::*;
+
+    fn jsonstr_set(s: Vec<Value>) -> HashSet<String> {
+        s.into_iter().map(|x| x.as_str().unwrap().to_string()).collect()
+    }
+
+    fn str_set(s: Vec<&str>) -> HashSet<String> {
+        s.into_iter().map(|x| x.to_string()).collect()
+    }
 
     #[test]
     fn complex() {
@@ -254,29 +340,40 @@ mod tests {
                     "foo": "bar",
                     "qux": "a.*"
                 },
-                "run": [ { "set": { "match1": "passed" } } ]
+                "run": [ "match1" ]
             },
             {
                 "when": { "foo": "baz" },
-                "run": [ { "set": { "match2": "passed" } } ],
+                "run": [ "match2" ],
                 "then": [
                     {
                         "when": { "qux": "a.*" },
-                        "run": [ { "set": { "match3": "passed" } } ]
+                        "run": [ "match3" ]
                     },
                     {
                         "when": { "qux": "ahoy" },
-                        "run": [ { "set": { "match4": "passed" } } ]
+                        "run": [ "match4" ]
                     }
                 ]
             }
         ]"#).unwrap();
 
         let (parser, init) = inp::Parser::parse(config);
-        let (_holder, mut simulator, keyval_state) = parser_to_simulator(parser, init);
+        let (_holder, mut simulator, keyval_state) =
+            parser_to_simulator::<30, 4, 15>(parser, init);
 
         let exts = simulator.finish_read(keyval_state, |_| Some("baz"));
-        assert_eq!(exts, vec![serde_json::json!({"set": {"match2":"passed"}})]);
+        assert_eq!(jsonstr_set(exts), str_set(vec!["match2"]));
+
+        let exts = simulator.read("qux".to_string(), "ahoy", |_| Some("baz"));
+        assert_eq!(jsonstr_set(exts), str_set(vec!["match3", "match4"]));
+
+        let exts = simulator.read("foo".to_string(), "bar", |_| Some("baz"));
+        assert_eq!(jsonstr_set(exts), str_set(vec![]));
+
+        // qux will not be checked twice because it is the last item in the match.
+        let exts = simulator.read("qux".to_string(), "ahoy", |_| Some("bar"));
+        assert_eq!(jsonstr_set(exts), str_set(vec!["match1"]));
     }
 
     #[test]
@@ -293,9 +390,18 @@ mod tests {
         ]"#).unwrap();
 
         let (parser, init) = inp::Parser::parse(config);
-        let (_holder, mut simulator, keyval_state) = parser_to_simulator(parser, init);
+        let (_holder, mut simulator, keyval_state) =
+            parser_to_simulator::<30, 4, 15>(parser, init);
 
-        let exts = simulator.finish_read(keyval_state, |_| Some("baz"));
+        let exts = simulator.finish_read(keyval_state, |_| None);
         assert_eq!(exts, Vec::<Value>::new());
+
+        let exts = simulator.read("bar".to_string(), "b", |_| Some("baz"));
+        assert_eq!(jsonstr_set(exts), str_set(vec![]));
+
+        // foo will be checked twice because it is not the last item in the match.
+        let exts = simulator.read("foo".to_string(), "a", |x| match x {
+            "bar" => Some("b"), "foo" => Some("a"), _ => None});
+        assert_eq!(jsonstr_set(exts), str_set(vec!["you win"]));
     }
 }
