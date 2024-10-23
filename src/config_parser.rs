@@ -87,12 +87,13 @@ impl Parser {
         &mut self,
         match_: Match,
     ) -> Target {
-        if match_.when.is_empty() {
-            panic!("expected at least one guard");
-        }
-
         let mut then = self.parse_parallel(match_.then);
         then.exts.extend(match_.run.into_iter().map(|ext| Ext::Ext(ext)));
+
+        if match_.when.is_empty() {
+            return then;
+        }
+
         let mut then_ix = TargetIx(self.targets.len());
         self.targets.push(then);
 
@@ -109,10 +110,10 @@ impl Parser {
         let state0_ix = self.states.len();
         let target0_ix = TargetIx(self.targets.len());
 
-        let get_waiter_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 3) };
+        let get_waiter_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 2) };
         let get_closer_state_ix = |i: usize| -> StateIx {
             assert!(i < match_.when.len() - 1);
-            StateIx(state0_ix + i * 3 + 1)
+            StateIx(state0_ix + i * 2 + 1)
         };
         let get_checker_target_ix = |i: usize| -> TargetIx {
             assert!(i != 0);
@@ -191,18 +192,18 @@ impl Parser {
             self_states: &mut Vec<State>,
             dfa_ix: DfaIx,
             then_ix: TargetIx,
-            waiter_target_ix: TargetIx
+            waiter_target_ix: TargetIx,
         | -> TargetIx {
-            let new_target0_ix = TargetIx(self_states.len());
+            let new_target0_ix = TargetIx(self.targets.len());
             for (dfa_state_ix, dfa_state) in self.dfas[dfa_ix.0].states.iter().enumerate() {
                 let new_state_ix = StateIx(self_states.len());
-                self_states.push(State { transitions: vec![] }); 
+
                 self.targets.push(Target {
                     exts: vec![],
                     states: vec![new_state_ix],
                 });
 
-                let new_state = self_states.last_mut().unwrap();
+                let mut new_state = State { transitions: vec![] };
                 for (guard, target) in dfa_state.transitions.iter() {
                     if *target == dfa_state_ix {
                         continue;
@@ -215,6 +216,8 @@ impl Parser {
                 } else {
                     new_state.transitions.push((Guard::EndVar, waiter_target_ix));
                 }
+
+                self_states.push(new_state);
             }
             new_target0_ix
         };

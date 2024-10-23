@@ -277,7 +277,8 @@ mod tests {
         ]"#).unwrap();
 
         let (parser, init) = inp::Parser::parse(config);
-        let (_holder, mut simulator, keyval_state) = parser_to_simulator::<RcRefCellSelector>(parser, init);
+        let (_holder, mut simulator, keyval_state) =
+            parser_to_simulator::<RcRefCellSelector>(parser, init);
 
         // let exts = simulator.finish_read(keyval_state, |_| Some("baz"));
         // assert_eq!(exts, Vec::<Value>::new());
@@ -297,9 +298,7 @@ mod tests {
         ]"#).unwrap();
 
         let (parser, init) = inp::Parser::parse(config);
-
-        // The output automaton is for now only for visual checking.
-        let file = std::fs::File::create("/tmp/test_simple.dot").unwrap();
-        parser.to_dot(init, std::io::BufWriter::new(file));
+        let (_holder, mut simulator, keyval_state) =
+            parser_to_simulator::<RcRefCellSelector>(parser, init);
     }
 }
