@@ -3,7 +3,7 @@ use indexmap::IndexSet;  // we use IndexSet for faster worst-case iteration
 use std::{hash::Hash, mem::MaybeUninit};
 use std::ptr::addr_of_mut;
 
-use crate::config_parser::guards::Guard;
+use crate::guards::Guard;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Explicit {

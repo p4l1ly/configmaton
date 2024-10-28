@@ -8,8 +8,14 @@ pub mod command;
 pub mod commands;
 pub mod automaton;
 pub mod keyval_simulator;
+pub mod guards;
+pub mod dfa;
+pub mod nfa;
+pub mod ast;
 pub mod config_parser;
-pub mod parser_to_simulator;
+
+// pub mod config_parser;
+// pub mod parser_to_simulator;
 
 use crate::lock::{LockSelector, Lock};
 use crate::command::{CommandBox, CommandTarget};

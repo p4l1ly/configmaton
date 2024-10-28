@@ -2,7 +2,7 @@ use hashbrown::HashMap;
 
 pub trait Monoid {
     fn empty() -> Self;
-    fn append(&mut self, other: Self);
+    fn append(&mut self, other: &Self);
 }
 
 #[derive(Hash, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
@@ -594,6 +594,10 @@ impl Guard {
         Guard(0b11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111, 0b11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111)
     }
 
+    pub fn from_range(range: (u8, u8)) -> Self {
+        BOTTOMS[range.0 as usize].intersection(&TOPS[range.1 as usize])
+    }
+
     pub fn add_range(&mut self, new_range: (u8, u8)) {
         *self = self.union(&BOTTOMS[new_range.0 as usize].intersection(&TOPS[new_range.1 as usize]));
     }
@@ -647,7 +651,7 @@ impl Guard {
                 let intersection = current_guard.intersection(&guard);
                 if !intersection.is_empty() {
                     let leaf_cfg = new_leaves.entry(intersection).or_insert(current_out.clone());
-                    leaf_cfg.append(out.clone());
+                    leaf_cfg.append(&out);
                 }
             }
 
@@ -716,7 +720,7 @@ mod tests {
             HashSet::new()
         }
 
-        fn append(&mut self, other: Self) {
+        fn append(&mut self, other: &Self) {
             self.extend(other);
         }
     }

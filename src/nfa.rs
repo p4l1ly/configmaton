@@ -4,26 +4,27 @@ use super::ast::Ast;
 use super::guards::Monoid;
 
 #[derive(Debug)]
-pub struct NfaState {
+pub struct State {
     pub transitions: Vec<((u8, u8), usize)>,
     pub epsilon_transitions: Vec<usize>
 }
 
-impl NfaState {
+impl State {
     fn new() -> Self {
         Self { transitions: Vec::new(), epsilon_transitions: Vec::new() }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Cfg(pub Vec<usize>, pub bool);
 
-impl Monoid for Cfg {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OrderedIxs(pub Vec<usize>);
+
+impl Monoid for OrderedIxs {
     fn empty() -> Self {
-        Cfg(vec![], false)
+        OrderedIxs(vec![])
     }
 
-    fn append(&mut self, other: Self) {
+    fn append(&mut self, other: &Self) {
         // union of sorted lists
         let mut i = 0;
         let mut j = 0;
@@ -34,19 +35,34 @@ impl Monoid for Cfg {
                 i += 1;
             } else {
                 result.push(other.0[j]);
+                if self.0[i] == other.0[j] { i += 1 }
                 j += 1;
             }
         }
         result.extend(self.0[i..].iter().cloned());
         result.extend(other.0[j..].iter().cloned());
         self.0 = result;
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Cfg(pub OrderedIxs, pub bool);
+
+impl Monoid for Cfg {
+    fn empty() -> Self {
+        Cfg(Monoid::empty(), false)
+    }
+
+    fn append(&mut self, other: &Self) {
+        self.0.append(&other.0);
         self.1 |= other.1;
     }
 }
 
 #[derive(Debug)]
 pub struct Nfa {
-    pub states: Vec<NfaState>,
+    pub states: Vec<State>,
 }
 
 impl Nfa {
@@ -54,8 +70,8 @@ impl Nfa {
         let mut automaton = Self {
             states: Vec::new(),
         };
-        automaton.states.push(NfaState::new());
-        automaton.states.push(NfaState::new());
+        automaton.states.push(State::new());
+        automaton.states.push(State::new());
         automaton.recur_ast(ast, 0, 1);
         automaton
     }
@@ -71,7 +87,7 @@ impl Nfa {
             }
             Ast::Concatenation(left, right) => {
                 let qmid = self.states.len();
-                self.states.push(NfaState::new());
+                self.states.push(State::new());
                 self.recur_ast(*left, qpre, qmid);
                 self.recur_ast(*right, qmid, qsuc);
             }
@@ -107,7 +123,7 @@ impl Nfa {
 
         let mut configuration2: Vec<usize> = configuration.into_iter().collect();
         configuration2.sort();
-        Cfg(configuration2, is_final)
+        Cfg(OrderedIxs(configuration2), is_final)
     }
 }
 
@@ -125,14 +141,19 @@ mod tests {
         assert_eq!(nfa.states[0].transitions, vec![((b'a', b'a'), 3)]);
         assert_eq!(
             nfa.states[3].transitions,
-            vec![((b'b', b'b'), 3), ((b'A', b'D'), 3), ((b'c', b'c'), 3), ((b'B', b'C'), 3)]
+            vec![
+                ((b'b', b'b'), 3),
+                ((b'A', b'D'), 3),
+                ((b'c', b'c'), 3),
+                ((b'B', b'C'), 3),
+            ]
         );
         assert_eq!(nfa.states[3].epsilon_transitions, vec![2]);
         assert_eq!(nfa.states[2].transitions, vec![((b'd', b'd'), 1)]);
 
-        assert_eq!(nfa.expand_config(vec![0]), Cfg(vec![0], false));
-        assert_eq!(nfa.expand_config(vec![1]), Cfg(vec![], true));
-        assert_eq!(nfa.expand_config(vec![2]), Cfg(vec![2], false));
-        assert_eq!(nfa.expand_config(vec![3]), Cfg(vec![2, 3], false));
+        assert_eq!(nfa.expand_config(vec![0]), Cfg(OrderedIxs(vec![0]), false));
+        assert_eq!(nfa.expand_config(vec![1]), Cfg(OrderedIxs(vec![]), true));
+        assert_eq!(nfa.expand_config(vec![2]), Cfg(OrderedIxs(vec![2]), false));
+        assert_eq!(nfa.expand_config(vec![3]), Cfg(OrderedIxs(vec![2, 3]), false));
     }
 }

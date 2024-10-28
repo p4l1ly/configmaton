@@ -6,10 +6,9 @@ use serde::de::{MapAccess, Visitor, Deserialize, Deserializer, Error, Unexpected
 use serde_json;
 use serde_json::Value;
 
-pub mod dfa;
-pub mod guards;
-pub mod ast;
-pub mod nfa;
+use crate::ast;
+use crate::nfa;
+use crate::dfa;
 
 #[derive(Debug)]
 pub enum Ext {
@@ -18,17 +17,11 @@ pub enum Ext {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct TargetIx (pub usize);
-impl TargetIx {
-    fn target_offset(&self, offset: usize) -> TargetIx {
-        TargetIx(self.0 + offset)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct StateIx (pub usize);
 #[derive(Debug, Clone, Copy)]
 pub struct DfaIx (pub usize);
+#[derive(Debug, Clone, Copy)]
+pub struct DfaStateIx (pub usize);
 
 #[derive(Debug)]
 pub struct Target {
@@ -37,30 +30,28 @@ pub struct Target {
 }
 
 #[derive(Debug)]
-pub enum Guard {
-    Var(String),
-    EndVar,
-    Guard(guards::Guard),
+pub struct Tran {
+    key: String,
+    dfa_inits: Vec<DfaStateIx>,
+    targets: Vec<(DfaIx, Target, Target)>,
 }
 
 #[derive(Debug)]
 pub struct State {
-    pub transitions: Vec<(Guard, TargetIx)>,
+    pub transitions: Vec<Tran>,
 }
 
 pub struct Parser {
     pub states: Vec<State>,
-    pub targets: Vec<Target>,
-    pub dfas: Vec<dfa::Dfa>,
-    pub regexes: HashMap<String, DfaIx>,
+    pub dfa: dfa::Dfa,
+    pub regexes: HashMap<String, (DfaStateIx, DfaIx)>,
 }
 
 impl Parser {
     pub fn parse(cmds: Vec<Cmd>) -> (Self, Target) {
         let mut parser = Parser {
             states: vec![],
-            targets: vec![],
-            dfas: vec![],
+            dfa: dfa::Dfa::new(),
             regexes: HashMap::new(),
         };
         let init = parser.parse_parallel(cmds);
@@ -90,187 +81,68 @@ impl Parser {
         let mut then = self.parse_parallel(match_.then);
         then.exts.extend(match_.run.into_iter().map(|ext| Ext::Ext(ext)));
 
-        if match_.when.is_empty() {
-            return then;
-        }
-
-        let mut then_ix = TargetIx(self.targets.len());
-        self.targets.push(then);
+        if match_.when.is_empty() { return then; }
 
         let dfa_ixs = match_.when.iter().map(|(_, regex)| {
+            let dfa_ix = self.regexes.len();
             *self.regexes.entry(regex.clone()).or_insert_with(|| {
-                let dfa_ix = self.dfas.len();
-                self.dfas.push(
-                    dfa::Dfa::from_nfa(nfa::Nfa::from_ast(ast::parse_regex(&regex)))
-                );
-                DfaIx(dfa_ix)
+                let dfa_state_ix = self.dfa.states.len();
+                self.dfa.add_nfa(nfa::Nfa::from_ast(ast::parse_regex(&regex)), dfa_ix);
+                (DfaStateIx(dfa_state_ix), DfaIx(dfa_ix))
             })
         }).collect::<Vec<_>>();
 
-        let state0_ix = self.states.len();
-        let target0_ix = TargetIx(self.targets.len());
-
-        let get_waiter_state_ix = |i: usize| -> StateIx { StateIx(state0_ix + i * 2) };
-        let get_closer_state_ix = |i: usize| -> StateIx {
-            assert!(i < match_.when.len() - 1);
-            StateIx(state0_ix + i * 2 + 1)
-        };
-        let get_checker_target_ix = |i: usize| -> TargetIx {
-            assert!(i != 0);
-            target0_ix.target_offset(2 + (i - 1) * 3)
-        };
-        let get_waiter_target_ix = |i: usize| -> TargetIx {
-            if i == 0 {
-                return target0_ix;
-            }
-            target0_ix.target_offset(2 + (i - 1) * 3 + 1)
-        };
-        let get_closer_target_ix = |i: usize| -> TargetIx {
-            assert!(i < match_.when.len() - 1);
-            if i == 0 {
-                return target0_ix.target_offset(1);
-            }
-            target0_ix.target_offset(2 + (i - 1) * 3 + 2)
-        };
-
-        if match_.when.len() == 1 {
-            // waiter
-            self.targets.push(Target {
-                exts: vec![],
-                states: vec![StateIx(self.states.len())],
-            });
-            self.states.push(State { transitions: vec![] });
-        } else {
-            // waiter
-            self.targets.push(Target {  // waiter
-                exts: vec![],
-                states: vec![StateIx(self.states.len())],
-            });
-            self.states.push(State { transitions: vec![] });
-
-            // closer (nonexistent for the last guard)
-            self.targets.push(Target {
-                exts: vec![Ext::GetOld(match_.when[0].0.clone())],
-                states: vec![StateIx(self.states.len())],
-            });
-            self.states.push(State { transitions: vec![] });
-
-            for (key, _) in match_.when[..match_.when.len() - 1].iter().skip(1) {
-                // waiter
-                self.targets.push(Target {
-                    exts: vec![Ext::GetOld(key.clone())],
-                    states: vec![StateIx(self.states.len())],
-                });
-                self.targets.push(Target {
-                    exts: vec![],
-                    states: vec![StateIx(self.states.len())],
-                });
-                self.states.push(State { transitions: vec![] });
-
-                // closer (nonexistent for the last guard)
-                self.targets.push(Target {
-                    exts: vec![Ext::GetOld(key.clone())],
-                    states: vec![StateIx(self.states.len())],
-                });
-                self.states.push(State { transitions: vec![] });
-            }
-
-            // waiter
-            let i = match_.when.len() - 1;
-            self.targets.push(Target {
-                exts: vec![Ext::GetOld(match_.when[i].0.clone())],
-                states: vec![StateIx(self.states.len())],
-            });
-            self.targets.push(Target {
-                exts: vec![],
-                states: vec![StateIx(self.states.len())],
-            });
-            self.states.push(State { transitions: vec![] });
-        }
-
-        let mut copy_dfa = |
-            self_states: &mut Vec<State>,
-            dfa_ix: DfaIx,
-            then_ix: TargetIx,
-            waiter_target_ix: TargetIx,
-        | -> TargetIx {
-            let new_target0_ix = TargetIx(self.targets.len());
-            for (dfa_state_ix, dfa_state) in self.dfas[dfa_ix.0].states.iter().enumerate() {
-                let new_state_ix = StateIx(self_states.len());
-
-                self.targets.push(Target {
-                    exts: vec![],
-                    states: vec![new_state_ix],
-                });
-
-                let mut new_state = State { transitions: vec![] };
-                for (guard, target) in dfa_state.transitions.iter() {
-                    if *target == dfa_state_ix {
-                        continue;
-                    }
-                    new_state.transitions.push(
-                        (Guard::Guard(guard.clone()), new_target0_ix.target_offset(*target)));
-                }
-                if dfa_state.is_final {
-                    new_state.transitions.push((Guard::EndVar, then_ix));
-                } else {
-                    new_state.transitions.push((Guard::EndVar, waiter_target_ix));
-                }
-
-                self_states.push(new_state);
-            }
-            new_target0_ix
-        };
-
-        for (i, ((key, _), dfa_ix)) in
-            match_.when[..match_.when.len() - 1].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
+        let guard_count = match_.when.len();
+        for ((key, _), (dfa_state_ix, dfa_ix)) in
+            match_.when[..guard_count - 1].into_iter().zip(dfa_ixs.iter()).rev()
         {
-            let dfa_target0_ix = copy_dfa(
-                &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
-
-            let guard = Guard::Var(key.clone());
-            self.states[get_closer_state_ix(i).0].transitions.push((guard, dfa_target0_ix));
-
-            then_ix = get_closer_target_ix(i);
+            let state_ix = self.states.len();
+            self.states.push(State { transitions: vec![Tran {
+                key: key.clone(),
+                dfa_inits: vec![*dfa_state_ix],
+                targets: vec![(
+                    *dfa_ix,
+                    then,
+                    Target { exts: vec![], states: vec![StateIx(state_ix + guard_count)] },
+                )],
+            }]});
+            then = Target {
+                exts: vec![Ext::GetOld(key.clone())],
+                states: vec![StateIx(state_ix)],
+            };
         }
 
-        for (i, ((key, _), dfa_ix)) in
-            match_.when[..match_.when.len()].into_iter().zip(dfa_ixs.iter()).enumerate().rev()
+        for ((key, _), (dfa_state_ix, dfa_ix)) in
+            match_.when[..guard_count].into_iter().zip(dfa_ixs.iter()).rev()
         {
-            let dfa_target0_ix = copy_dfa(
-                &mut self.states, *dfa_ix, then_ix, get_waiter_target_ix(i));
+            let state_ix = self.states.len();
+            self.states.push(State { transitions: vec![Tran {
+                key: key.clone(),
+                dfa_inits: vec![*dfa_state_ix],
+                targets: vec![(
+                    *dfa_ix,
+                    then,
+                    Target { exts: vec![], states: vec![StateIx(state_ix)] },
+                )],
+            }]});
 
-            self.states[get_waiter_state_ix(i).0].transitions.push(
-                (Guard::Var(key.clone()), dfa_target0_ix));
-
-            if i != 0 {
-                then_ix = get_checker_target_ix(i);
-            }
+            then = Target {
+                exts: vec![Ext::GetOld(key.clone())],
+                states: vec![StateIx(state_ix)],
+            };
         }
 
-        Target{
-            exts: vec![Ext::GetOld(match_.when[0].0.clone())],
-            states: vec![StateIx(state0_ix)]
-        }
+        then
     }
 
-    pub fn to_dot<W: Write>(&self, init: Target, mut writer: W) {
+    pub fn to_dot<W: Write>(&self, init: &Target, mut writer: W) {
         writer.write_all(b"digraph G {\n").unwrap();
 
+        let mut write = |x: String| writer.write_all(x.as_bytes()).unwrap();
+
         for i in 0..self.states.len() {
-            writer.write_all(format!("  q{}\n", i).as_bytes()).unwrap();
+            write(format!("  q{}\n", i));
         }
-
-        for i in 0..self.targets.len() {
-            writer.write_all(
-                format!("  t{} [ shape=\"rect\" ]\n", i).as_bytes()).unwrap();
-            writer.write_all(
-                format!("  e{} [ shape=\"diamond\" ]\n", i).as_bytes()).unwrap();
-        }
-
-        // println!("~~~ {:?} ~~~> {:?}", init.exts, init.states);
-        writer.write_all(b"  ti [ shape=\"rect\" ]\n").unwrap();
-        writer.write_all(b"  ei [ shape=\"diamond\" ]\n").unwrap();
 
         let fmte = |exts: &Vec<Ext>| -> String {
             exts.iter().map(|ext| match ext {
@@ -279,34 +151,54 @@ impl Parser {
             }).collect::<Vec<_>>().join(", ").replace("\\", "\\\\").replace("\"", "\\\"")
         };
 
-        let fmtg = |guard: &Guard| -> String {
-            match guard {
-                Guard::Var(s) => format!("Var({})", s),
-                Guard::EndVar => "EndVar".to_string(),
-                Guard::Guard(g) => format!("{:?}", g),
-            }.replace("\\", "\\\\").replace("\"", "\\\"")
-        };
+        // println!("~~~ {:?} ~~~> {:?}", init.exts, init.states);
+        write("  ti [ shape=\"square\" ]\n".to_owned());
+        write("  ei [ shape=\"diamond\" ]\n".to_owned());
 
-        writer.write_all(
-            format!("  ti -> ei [label=\"{}\"]\n", fmte(&init.exts)).as_bytes()).unwrap();
-        for state in init.states {
-            writer.write_all(format!("  ei -> q{}\n", state.0).as_bytes()).unwrap();
+        write(format!("  ti -> ei [label=\"{}\"]\n", fmte(&init.exts)));
+        for state in init.states.iter() {
+            write(format!("  ei -> q{}\n", state.0));
         }
 
-        for (i, state) in self.states.iter().enumerate() {
-            for (guard, target) in state.transitions.iter() {
-                writer.write_all(
-                    format!("  q{} -> t{} [label=\"{}\"]\n", i, target.0, fmtg(&guard)).as_bytes()
-                ).unwrap();
+        {
+            let mut tix = 0;
+            let mut gix = 0;
+            for (qix, state) in self.states.iter().enumerate() {
+                for tran in state.transitions.iter() {
+                    write(format!("  g{} [ shape=\"diamond\" ]\n", gix));
+                    write(format!("  q{} -> g{} [label=\"{}\"]\n", qix, gix, tran.key));
+
+                    for dix in tran.dfa_inits.iter() {
+                        write(format!("  g{} -> d{} [color=\"blue\"]\n", gix, dix.0));
+                    }
+
+                    for (dfa_ix, pos_target, neg_target) in tran.targets.iter() {
+                        write(format!("  t{} [ shape=\"square\" ]\n", tix));
+                        write(format!("  e{} [ shape=\"diamond\" ]\n", tix));
+                        write(format!("  g{} -> t{} [label=\"{}\"]\n", gix, tix, dfa_ix.0));
+                        write(format!("  t{} -> e{} [label=\"{}\", color=\"green\"]\n",
+                            tix, tix, fmte(&pos_target.exts)));
+                        write(format!("  t{} -> e{} [label=\"{}\", color=\"red\"]\n",
+                            tix, tix, fmte(&neg_target.exts)));
+                        for state in pos_target.states.iter()
+                            { write(format!("  e{} -> q{} [color=\"green\"]\n", tix, state.0)); }
+                        for state in neg_target.states.iter()
+                            { write(format!("  e{} -> q{} [color=\"red\"]\n", tix, state.0)); }
+                        tix += 1;
+                    }
+
+                    gix += 1;
+                }
             }
         }
 
-        for (i, target) in self.targets.iter().enumerate() {
-            writer.write_all(
-                format!("  t{} -> e{} [label=\"{}\"]\n", i, i, fmte(&target.exts)).as_bytes()
-            ).unwrap();
-            for state in target.states.iter() {
-                writer.write_all(format!("  e{} -> q{}\n", i, state.0).as_bytes()).unwrap();
+        for (dix, state) in self.dfa.states.iter().enumerate() {
+            write(format!("  d{} [label=\"d{}", dix, dix));
+            for tag in state.tags.0.iter() { write(format!(" {}", tag)); }
+            write("\"]\n".to_owned());
+
+            for (guard, state) in state.transitions.iter() {
+                write(format!("  d{} -> d{} [label=\"{:?}\"]\n", dix, state, guard));
             }
         }
 
@@ -444,7 +336,7 @@ mod tests {
 
         // The output automaton is for now only for visual checking.
         let file = std::fs::File::create("/tmp/test_complex.dot").unwrap();
-        parser.to_dot(init, std::io::BufWriter::new(file));
+        parser.to_dot(&init, std::io::BufWriter::new(file));
     }
 
     #[test]
@@ -464,6 +356,6 @@ mod tests {
 
         // The output automaton is for now only for visual checking.
         let file = std::fs::File::create("/tmp/test_simple.dot").unwrap();
-        parser.to_dot(init, std::io::BufWriter::new(file));
+        parser.to_dot(&init, std::io::BufWriter::new(file));
     }
 }
