@@ -195,9 +195,7 @@ impl Dfa {
                     cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::empty()).union_update(&guard);
                 }
 
-                if cfgsuc_to_guard.len() == len_before {
-                    break;
-                }
+                if cfgsuc_to_guard.len() == len_before { break; }
                 len_before = cfgsuc_to_guard.len();
             }
 
@@ -217,9 +215,7 @@ impl Dfa {
                     guard_to_cfgsuc.entry(guard).or_insert(Monoid::empty()).append(&cfgsuc);
                 }
 
-                if guard_to_cfgsuc.len() == len_before {
-                    break;
-                }
+                if guard_to_cfgsuc.len() == len_before { break; }
                 len_before = guard_to_cfgsuc.len();
             }
 
