@@ -1,4 +1,5 @@
 use hashbrown::HashMap;
+use hashbrown::HashSet;
 use std::io::Write;
 use std::fmt;
 
@@ -10,13 +11,13 @@ use crate::ast;
 use crate::nfa;
 use crate::dfa;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Ext {
     GetOld(String),
     Ext(Value),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StateIx (pub usize);
 #[derive(Debug, Clone, Copy)]
 pub struct DfaIx (pub usize);
@@ -29,11 +30,34 @@ pub struct Target {
     pub states: Vec<StateIx>,
 }
 
+impl Target {
+    pub fn join<'a, I: Iterator<Item=Self>>(targets: I) -> Self {
+        let mut exts = HashSet::new();
+        let mut states = HashSet::new();
+        for target in targets {
+            exts.extend(target.exts.into_iter());
+            states.extend(target.states.into_iter());
+        }
+        Target {
+            exts: exts.into_iter().collect(),
+            states: states.into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Bdd {
+    pub leaves: Vec<Target>,
+    // (dfa_ix, pos, neg) where pos and neg are primarily indices to leaves and if they are bigger
+    // than the number of leaves, they are indices to nodes.
+    pub nodes: Vec<(DfaIx, usize, usize)>,
+}
+
 #[derive(Debug)]
 pub struct Tran {
     key: String,
     dfa_inits: Vec<DfaStateIx>,
-    targets: Vec<(DfaIx, Target, Target)>,
+    bdd: Bdd,
 }
 
 #[derive(Debug)]
@@ -60,18 +84,11 @@ impl Parser {
     }
 
     fn parse_parallel(&mut self, cmds: Vec<Cmd>) -> Target {
-        let mut result = Target { exts: vec![], states: vec![] };
-        for cmd in cmds {
-            match cmd {
-                Cmd::Match(match_) => {
-                    let result2 = self.parse_match(match_);
-                    result.exts.extend(result2.exts.into_iter());
-                    result.states.extend(result2.states.into_iter());
-                }
-                _ => unimplemented!(),
-            }
-        }
-        result
+        let targets = cmds.into_iter().map(|cmd| match cmd {
+            Cmd::Match(match_) => self.parse_match(match_),
+            _ => unimplemented!(),
+        });
+        Target::join(targets)
     }
 
     fn parse_match(
@@ -97,14 +114,14 @@ impl Parser {
             match_.when[..guard_count - 1].into_iter().zip(dfa_ixs.iter()).rev()
         {
             let state_ix = self.states.len();
+            let else_ = Target { exts: vec![], states: vec![StateIx(state_ix + guard_count)] };
             self.states.push(State { transitions: vec![Tran {
                 key: key.clone(),
                 dfa_inits: vec![*dfa_state_ix],
-                targets: vec![(
-                    *dfa_ix,
-                    then,
-                    Target { exts: vec![], states: vec![StateIx(state_ix + guard_count)] },
-                )],
+                bdd: Bdd {
+                    leaves: vec![then, else_],
+                    nodes: vec![(*dfa_ix, 0, 1)],
+                },
             }]});
             then = Target {
                 exts: vec![Ext::GetOld(key.clone())],
@@ -116,14 +133,14 @@ impl Parser {
             match_.when[..guard_count].into_iter().zip(dfa_ixs.iter()).rev()
         {
             let state_ix = self.states.len();
+            let else_ = Target { exts: vec![], states: vec![StateIx(state_ix)] };
             self.states.push(State { transitions: vec![Tran {
                 key: key.clone(),
                 dfa_inits: vec![*dfa_state_ix],
-                targets: vec![(
-                    *dfa_ix,
-                    then,
-                    Target { exts: vec![], states: vec![StateIx(state_ix)] },
-                )],
+                bdd: Bdd {
+                    leaves: vec![then, else_],
+                    nodes: vec![(*dfa_ix, 0, 1)],
+                },
             }]});
 
             then = Target {
@@ -163,6 +180,7 @@ impl Parser {
         {
             let mut tix = 0;
             let mut gix = 0;
+            let mut bix = 0;
             for (qix, state) in self.states.iter().enumerate() {
                 for tran in state.transitions.iter() {
                     write(format!("  g{} [ shape=\"diamond\" ]\n", gix));
@@ -172,19 +190,40 @@ impl Parser {
                         write(format!("  g{} -> d{} [color=\"blue\"]\n", gix, dix.0));
                     }
 
-                    for (dfa_ix, pos_target, neg_target) in tran.targets.iter() {
+                    let tix0 = tix;
+
+                    for target in tran.bdd.leaves.iter() {
                         write(format!("  t{} [ shape=\"square\" ]\n", tix));
                         write(format!("  e{} [ shape=\"diamond\" ]\n", tix));
-                        write(format!("  g{} -> t{} [label=\"{}\"]\n", gix, tix, dfa_ix.0));
-                        write(format!("  t{} -> e{} [label=\"{}\", color=\"green\"]\n",
-                            tix, tix, fmte(&pos_target.exts)));
-                        write(format!("  t{} -> e{} [label=\"{}\", color=\"red\"]\n",
-                            tix, tix, fmte(&neg_target.exts)));
-                        for state in pos_target.states.iter()
-                            { write(format!("  e{} -> q{} [color=\"green\"]\n", tix, state.0)); }
-                        for state in neg_target.states.iter()
-                            { write(format!("  e{} -> q{} [color=\"red\"]\n", tix, state.0)); }
+                        write(format!("  t{} -> e{} [label=\"{}\"]\n",
+                            tix, tix, fmte(&target.exts)));
+                        for state in target.states.iter()
+                            { write(format!("  e{} -> q{}\n", tix, state.0)); }
                         tix += 1;
+                    }
+
+                    let llen = tran.bdd.leaves.len();
+                    let bix0 = bix;
+
+                    for (dtag, pos, neg) in tran.bdd.nodes.iter() {
+                        write(format!("  b{} [ shape=\"diamond\", label=\"{}\" ]\n", bix, dtag.0));
+                        if *pos < llen {
+                            write(format!("  b{} -> t{} [ color=green ]\n", bix, tix0 + *pos));
+                        } else {
+                            write(format!("  b{} -> b{} [ color=green ]\n", bix, bix0 + *pos - llen));
+                        }
+                        if *neg < llen {
+                            write(format!("  b{} -> t{} [ color=red ]\n", bix, tix0 + *neg));
+                        } else {
+                            write(format!("  b{} -> b{} [ color=red ]\n", bix, bix0 + *neg - llen));
+                        }
+                        bix += 1;
+                    }
+
+                    if tran.bdd.nodes.is_empty() {
+                        write(format!("  g{} -> t{}\n", gix, tix - 1));
+                    } else {
+                        write(format!("  g{} -> b{}\n", gix, bix - 1));
                     }
 
                     gix += 1;

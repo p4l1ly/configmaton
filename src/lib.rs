@@ -6,7 +6,7 @@ use serde_json::Value;
 pub mod lock;
 pub mod command;
 pub mod commands;
-pub mod automaton;
+pub mod keyval_runner;
 pub mod keyval_simulator;
 pub mod guards;
 pub mod dfa;

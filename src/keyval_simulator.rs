@@ -2,84 +2,74 @@ use indexmap::IndexSet;
 
 use serde_json::Value;
 
-use crate::automaton::{Explicit, Listeners, TranListener, AnyStateLock};
+use crate::keyval_runner::{Runner, TranListener, AnyStateLock};
 
 #[derive(Clone, Debug)]
-pub enum Trigger {
-    Old(String),
-    Ext(Value),
+pub enum Trigger<'a> {
+    Old(&'a str),
+    Ext(&'a Value),
 }
 
 #[derive(Clone, Debug)]
-pub struct Triggers(pub Box<[Trigger]>);
+pub struct Triggers<'a>(pub Box<[Trigger<'a>]>);
 
 #[derive(Clone, Debug)]
-pub struct KeyValState {
-    pub result: Vec<Value>,
-    pub old_queries: IndexSet<String>,
+pub struct KeyValState<'a> {
+    pub result: Vec<&'a Value>,
+    pub old_queries: IndexSet<&'a str>,
 }
 
-impl KeyValState {
+impl KeyValState<'_> {
     pub fn new() -> Self {
         KeyValState { result: vec![], old_queries: IndexSet::new() }
     }
 }
 
-impl TranListener<Triggers> for KeyValState {
-    fn trigger(&mut self, trigger: &Triggers) {
+impl<'a> TranListener<Triggers<'a>> for KeyValState<'a> {
+    fn trigger(&mut self, trigger: &Triggers<'a>) {
         for trigger in trigger.0.iter() {
             match trigger {
                 Trigger::Old(key) => {
-                    self.old_queries.insert(key.clone());
+                    self.old_queries.insert(key);
                 }
                 Trigger::Ext(value) => {
-                    self.result.push(value.clone());
+                    self.result.push(value);
                 }
             }
         }
     }
 }
 
-
-pub trait Database {
-    fn read(&self, key: String) -> Option<String>;
+pub struct Simulator<'a> {
+    runner: Runner<'a, Triggers<'a>>
 }
 
-pub struct KeyValSimulator<'a> {
-    listeners: Listeners<'a, Triggers>
-}
-
-impl<'a> KeyValSimulator<'a> {
-    pub fn new<I: IntoIterator<Item = AnyStateLock<'a, Triggers>>>(initial_states: I) -> Self {
-        KeyValSimulator { listeners: Listeners::new(initial_states) }
+impl<'a> Simulator<'a> {
+    pub fn new<'b, I: IntoIterator<Item = &'b AnyStateLock<'a, Triggers<'a>>>>
+    (initial_states: I) -> Self
+    where 'a: 'b
+    {
+        Simulator { runner: Runner::new(initial_states) }
     }
 }
 
-impl<'a> KeyValSimulator<'a> {
+impl<'a> Simulator<'a> {
     pub fn read<'b, F: Fn(&str) -> Option<&'b str>>
-        (&'b mut self, key: String, val: &'b str, olds: F)
-        -> Vec<Value>
+        (&'b mut self, key: &'b str, val: &'b str, olds: F)
+        -> Vec<&'a Value>
     {
         let mut tl = KeyValState { result: vec![], old_queries: IndexSet::new() };
-        self.listeners.read(Explicit::Var(key), &mut tl);
-        for c in val.chars() {
-            self.listeners.read(Explicit::Char(c as u8), &mut tl);
-        }
-        self.listeners.read(Explicit::EndVar, &mut tl);
+        self.runner.read(key, val, &mut tl);
         self.finish_read(tl, olds)
     }
 
     pub fn finish_read<'b, F: Fn(&str) -> Option<&'b str>>
-        (&mut self, mut tl: KeyValState, olds: F)
-        -> Vec<Value>
+        (&mut self, mut tl: KeyValState<'a>, olds: F)
+        -> Vec<&'a Value>
     {
         while let Some(oldkey) = tl.old_queries.pop() {
             if let Some(oldval) = olds(&oldkey) {
-                self.listeners.read(Explicit::Var(oldkey), &mut tl);
-                for c in oldval.chars() {
-                    self.listeners.read(Explicit::Char(c as u8), &mut tl);
-                }
-                self.listeners.read(Explicit::EndVar, &mut tl);
+                self.runner.read(oldkey, oldval, &mut tl);
             }
         }
         tl.result
