@@ -4,8 +4,7 @@ use hashbrown::{HashMap, hash_map::Entry};
 
 use super::guards;
 use super::guards::{Guard, Monoid};
-use super::nfa::{Nfa, OrderedIxs};
-use super::nfa;
+use super::char_enfa::{Cfg, Nfa as Enfa, OrderedIxs};
 
 
 pub struct State {
@@ -14,29 +13,29 @@ pub struct State {
     pub is_deterministic: bool,
 }
 
-pub struct Dfa {
+pub struct Nfa {
     pub states: Vec<State>,
     pub configurations_to_states: HashMap<OrderedIxs, (usize, usize)>,
     pub visited_states: HashMap<usize, usize>,
 }
 
-impl Dfa {
+impl Nfa {
     pub fn new() -> Self {
-        Dfa {
+        Nfa {
             states: vec![],
             configurations_to_states: HashMap::new(),
             visited_states: HashMap::new(),
         }
     }
 
-    pub fn add_nfa(&mut self, nfa: Nfa, tag: usize) {
-        let mut reachable_configurations: HashMap<nfa::Cfg, usize> = HashMap::new();
+    pub fn add_nfa(&mut self, enfa: Enfa, tag: usize) {
+        let mut reachable_configurations: HashMap<Cfg, usize> = HashMap::new();
         let mut frontier: Vec<(OrderedIxs, usize)> = vec![];
 
-        let q = nfa.expand_config(vec![0]);
+        let q = enfa.expand_config(vec![0]);
         let qix = self.states.len();
         reachable_configurations.insert(q.clone(), qix);
-        let nfa::Cfg(nfa_config, is_final) = q;
+        let Cfg(enfa_config, is_final) = q;
 
         self.states.push(
             State {
@@ -46,12 +45,12 @@ impl Dfa {
             },
         );
 
-        frontier.push((nfa_config, qix));
+        frontier.push((enfa_config, qix));
 
-        while let Some((nfa_config, state_ix)) = frontier.pop() {
+        while let Some((enfa_config, state_ix)) = frontier.pop() {
             let mut transitions = vec![];
-            for nfa_state_ix in nfa_config.0 {
-                for t in nfa.states[nfa_state_ix].transitions.iter() {
+            for enfa_state_ix in enfa_config.0 {
+                for t in enfa.states[enfa_state_ix].transitions.iter() {
                     transitions.push(*t);
                 }
             }
@@ -61,9 +60,9 @@ impl Dfa {
                 suc_to_guard.entry(suc).or_insert(Guard::empty()).add_range(range);
             }
 
-            let mut cfgsuc_to_guard: HashMap<nfa::Cfg, Guard> = HashMap::new();
+            let mut cfgsuc_to_guard: HashMap<Cfg, Guard> = HashMap::new();
             for (suc, guard) in suc_to_guard {
-                let cfgsuc = nfa.expand_config(vec![suc]);
+                let cfgsuc = enfa.expand_config(vec![suc]);
                 cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::empty()).union_update(&guard);
             }
 
@@ -236,14 +235,13 @@ impl Dfa {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::nfa::Nfa;
     use super::super::ast::parse_regex;
 
     #[test]
     fn dfa_works() {
-        let nfa = Nfa::from_ast(parse_regex("a([bA-D]|[cB-C])*d"));
-        let mut dfa = Dfa::new();
-        dfa.add_nfa(nfa, 0);
+        let enfa = Enfa::from_ast(parse_regex("a([bA-D]|[cB-C])*d"));
+        let mut dfa = Nfa::new();
+        dfa.add_nfa(enfa, 0);
         dfa.determinize(OrderedIxs(vec![0]), 1000);
         let qfinal = OrderedIxs(vec![0]);
         let qnonfinal = OrderedIxs(vec![]);
@@ -282,28 +280,28 @@ mod tests {
     }
 
     #[test]
-    fn epsilon_dfa_works() {
-        let nfa = Nfa::from_ast(parse_regex(""));
-        let mut dfa = Dfa::new();
-        dfa.add_nfa(nfa, 0);
-        dfa.determinize(OrderedIxs(vec![0]), 1000);
+    fn emptyword_dfa_works1() {
+        let enfa = Enfa::from_ast(parse_regex(""));
+        let mut nfa = Nfa::new();
+        nfa.add_nfa(enfa, 0);
+        nfa.determinize(OrderedIxs(vec![0]), 1000);
 
-        assert_eq!(dfa.states.len(), 2);
-        assert_eq!(dfa.states[0].tags, OrderedIxs(vec![0]));
-        assert_eq!(dfa.states[0].transitions, vec![(Guard::full(), 1)]);
+        assert_eq!(nfa.states.len(), 2);
+        assert_eq!(nfa.states[0].tags, OrderedIxs(vec![0]));
+        assert_eq!(nfa.states[0].transitions, vec![(Guard::full(), 1)]);
 
-        assert_eq!(dfa.states[1].tags, OrderedIxs(vec![]));
-        assert_eq!(dfa.states[1].transitions, vec![(Guard::full(), 1)]);
+        assert_eq!(nfa.states[1].tags, OrderedIxs(vec![]));
+        assert_eq!(nfa.states[1].transitions, vec![(Guard::full(), 1)]);
     }
 
     #[test]
-    fn epsilon_nfa_works() {
-        let nfa = Nfa::from_ast(parse_regex(""));
-        let mut dfa = Dfa::new();
-        dfa.add_nfa(nfa, 0);
+    fn emptyword_nfa_works2() {
+        let enfa = Enfa::from_ast(parse_regex(""));
+        let mut nfa = Nfa::new();
+        nfa.add_nfa(enfa, 0);
 
-        assert_eq!(dfa.states.len(), 1);
-        assert_eq!(dfa.states[0].tags, OrderedIxs(vec![0]));
-        assert_eq!(dfa.states[0].transitions, vec![]);
+        assert_eq!(nfa.states.len(), 1);
+        assert_eq!(nfa.states[0].tags, OrderedIxs(vec![0]));
+        assert_eq!(nfa.states[0].transitions, vec![]);
     }
 }

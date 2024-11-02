@@ -8,8 +8,8 @@ use serde_json;
 use serde_json::Value;
 
 use crate::ast;
-use crate::nfa;
-use crate::dfa;
+use crate::char_enfa;
+use crate::char_nfa;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Ext {
@@ -67,7 +67,7 @@ pub struct State {
 
 pub struct Parser {
     pub states: Vec<State>,
-    pub dfa: dfa::Dfa,
+    pub nfa: char_nfa::Nfa,
     pub regexes: HashMap<String, (DfaStateIx, DfaIx)>,
 }
 
@@ -75,7 +75,7 @@ impl Parser {
     pub fn parse(cmds: Vec<Cmd>) -> (Self, Target) {
         let mut parser = Parser {
             states: vec![],
-            dfa: dfa::Dfa::new(),
+            nfa: char_nfa::Nfa::new(),
             regexes: HashMap::new(),
         };
         let init = parser.parse_parallel(cmds);
@@ -103,8 +103,8 @@ impl Parser {
         let dfa_ixs = match_.when.iter().map(|(_, regex)| {
             let dfa_ix = self.regexes.len();
             *self.regexes.entry(regex.clone()).or_insert_with(|| {
-                let dfa_state_ix = self.dfa.states.len();
-                self.dfa.add_nfa(nfa::Nfa::from_ast(ast::parse_regex(&regex)), dfa_ix);
+                let dfa_state_ix = self.nfa.states.len();
+                self.nfa.add_nfa(char_enfa::Nfa::from_ast(ast::parse_regex(&regex)), dfa_ix);
                 (DfaStateIx(dfa_state_ix), DfaIx(dfa_ix))
             })
         }).collect::<Vec<_>>();
@@ -231,7 +231,7 @@ impl Parser {
             }
         }
 
-        for (dix, state) in self.dfa.states.iter().enumerate() {
+        for (dix, state) in self.nfa.states.iter().enumerate() {
             write(format!("  d{} [label=\"d{}", dix, dix));
             for tag in state.tags.0.iter() { write(format!(" {}", tag)); }
             write("\"]\n".to_owned());

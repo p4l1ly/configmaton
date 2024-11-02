@@ -9,12 +9,13 @@ pub mod commands;
 pub mod keyval_runner;
 pub mod keyval_simulator;
 pub mod guards;
-pub mod dfa;
-pub mod nfa;
+pub mod char_nfa;
+pub mod char_enfa;
 pub mod ast;
-pub mod config_parser;
+pub mod keyval_nfa;
 pub mod char_runner;
 pub mod borrow_lock;
+pub mod blob;
 
 // pub mod parser_to_simulator;
 
