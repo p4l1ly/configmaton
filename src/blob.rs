@@ -27,7 +27,7 @@ pub trait Matches<T> {
     fn matches(&self, other: &T) -> bool;
 }
 
-struct EqMatch<'a, X>(&'a X);
+pub struct EqMatch<'a, X>(pub &'a X);
 
 impl<'a, X: Eq> Matches<X> for EqMatch<'a, X> {
     fn matches(&self, other: &X) -> bool {
@@ -54,49 +54,48 @@ unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
     align_up((a as *const u8).add(size_of::<A>()) as usize, align_of::<B>()) as *const B
 }
 
-struct Reserve(usize);
+pub struct Reserve(pub usize);
 
 impl Reserve {
-    fn add<T>(&mut self, n: usize) {
+    pub fn add<T>(&mut self, n: usize) {
         self.0 = align_up(self.0, align_of::<T>()) + size_of::<T>() * n;
     }
 }
 
 #[derive(Copy)]
-struct BuildIx<A>{
-    ix: usize,
-    buf: *mut u8,
+pub struct BuildCursor<A>{
+    pub cur: usize,
+    pub buf: *mut u8,
     _phantom: PhantomData<A>,
 }
 
-impl<A> BuildIx<A> {
-    fn inc(&mut self) {
-        self.ix += size_of::<A>();
+impl<A> BuildCursor<A> {
+    pub fn inc(&mut self) {
+        self.cur += size_of::<A>();
     }
 
-    fn behind<B>(&self, n: usize) -> BuildIx<B> {
-        BuildIx {
-            ix: align_up(self.ix + size_of::<A>() * n, align_of::<B>()),
+    pub fn behind<B>(&self, n: usize) -> BuildCursor<B> {
+        BuildCursor {
+            cur: align_up(self.cur + size_of::<A>() * n, align_of::<B>()),
             buf: self.buf,
             _phantom: PhantomData
         }
     }
 
-    unsafe fn get_mut(&self) -> *mut A {
-        self.buf.add(self.ix) as *mut A
+    pub unsafe fn get_mut(&self) -> *mut A {
+        self.buf.add(self.cur) as *mut A
     }
-
 }
 
-impl<A> Clone for BuildIx<A> {
+impl<A> Clone for BuildCursor<A> {
     fn clone(&self) -> Self {
-        Self { ix: self.ix, buf: self.buf, _phantom: PhantomData }
+        Self { cur: self.cur, buf: self.buf, _phantom: PhantomData }
     }
 }
 
-struct Shifter(*mut u8);
+pub struct Shifter(pub *const u8);
 impl Shifter {
-    unsafe fn shift<T>(&self, x: &mut *const T) {
+    pub unsafe fn shift<T>(&self, x: &mut *const T) {
         *x = self.0.add(*x as *const u8 as usize) as *const T
     }
 }
@@ -107,7 +106,7 @@ struct BlobHashMap<'a, AList> {
     _phantom: PhantomData<&'a AList>,
 }
 
-impl<'a, AList: AssocList<'a>> BlobHashMap<'a, AList> {
+impl<'a, AList: Assocs<'a>> BlobHashMap<'a, AList> {
     unsafe fn get(&self, key: &AList::Key) -> Option<&AList::Val>
         where AList::Key: Eq + MyHash
     {
@@ -121,94 +120,191 @@ impl<'a, AList: AssocList<'a>> BlobHashMap<'a, AList> {
     }
 }
 
-pub trait AssocListSuper<'a> {
+impl<'a, AList> BlobHashMap<'a, AList> {
+    pub unsafe fn deserialize
+    <
+        F: Fn(BuildCursor<AList>) -> BuildCursor<AList>,
+        After,
+    >
+    (cur: BuildCursor<Self>, each: F) -> BuildCursor<After> {
+        let mut arr_cur = cur.behind::<*const AList>(1);
+        let hashmap_cap = (*cur.get_mut()).mask + 1;
+        let mut alist_cur = arr_cur.behind::<AList>(hashmap_cap);
+        for _ in 0..(*cur.get_mut()).mask + 1 {
+            let arr_ptr = arr_cur.get_mut();
+            if !(*arr_ptr).is_null() {
+                Shifter(cur.buf).shift(&mut *arr_ptr);
+                alist_cur = each(alist_cur);
+            }
+            arr_cur.inc();
+        }
+        alist_cur.behind(0)
+    }
+}
+
+pub trait AssocsSuper<'a> {
     type Key: 'a;
     type Val: 'a;
     type I<'b, X: 'b + Matches<Self::Key>>: UnsafeIterator<Item = &'a Self::Val> where 'a: 'b;
 }
 
-trait AssocList<'a>: AssocListSuper<'a> {
+trait Assocs<'a>: AssocsSuper<'a> {
     unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c;
 }
 
 #[repr(C)]
-struct HomoKeyAlternAssocList<'a, K, V> {
-    key: K,
-    next: *const HomoKeyAlternAssocList<'a, K, V>,
-    _phantom: PhantomData<&'a V>,
+pub struct List<'a, X> {
+    next: *const List<'a, X>,
+    _phantom: PhantomData<&'a X>,
 }
 
-struct HomoKeyAlternAssocListIter<'a, 'b, X, K, V> {
-    x: &'b X,
-    cur: *const HomoKeyAlternAssocList<'a, K, V>,
-    _phantom: PhantomData<&'a K>,
-}
-
-impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for HomoKeyAlternAssocListIter<'a, 'b, X, K, V> {
-    type Item = &'a V;
-
+impl<'a, X> UnsafeIterator for *const List<'a, X> {
+    type Item = &'a X;
     unsafe fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let cur_ref = &*self.cur;
-            if self.x.matches(&cur_ref.key) {
-                return Some(&*get_behind_struct::<_, V>(self.cur));
-            }
-            if cur_ref.next.is_null() {
+            if self.is_null() {
                 return None;
             }
-            self.cur = cur_ref.next;
+            let item = *self;
+            *self = (*item).next;
+            return Some(&*get_behind_struct::<_, X>(item));
         }
     }
 }
 
-impl<'a, K: 'a, V: 'a> AssocListSuper<'a> for HomoKeyAlternAssocList<'a, K, V> {
-    type Key = K;
-    type Val = V;
-    type I<'b, X: 'b + Matches<K>> = HomoKeyAlternAssocListIter<'a, 'b, X, K, V> where 'a: 'b;
-}
-
-impl<'a, K: 'a, V: 'a> AssocList<'a> for HomoKeyAlternAssocList<'a, K, V> {
-    unsafe fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
-        where 'a: 'b + 'c
+impl<'a, X> List<'a, X> {
+    pub unsafe fn deserialize
+    <F: Fn(BuildCursor<X>) -> BuildCursor<Self>, After>
+    (mut cur: BuildCursor<Self>, each: F) -> BuildCursor<After>
     {
-        HomoKeyAlternAssocListIter {
-            x: key,
-            cur: self,
-            _phantom: PhantomData,
+        loop {
+            let alist = &mut *cur.get_mut();
+            cur = each(cur.behind(1));
+            if alist.next.is_null() { return cur.behind(0); }
+            Shifter(cur.buf).shift(&mut alist.next);
         }
     }
 }
 
 #[repr(C)]
-struct HomoVec<'a, X> {
+pub struct AssocList<'a, KV>(List<'a, KV>);
+
+impl<'a, KV> AssocList<'a, KV> {
+    pub unsafe fn deserialize
+    <
+        F: Fn(BuildCursor<KV>) -> BuildCursor<Self>,
+        After,
+    >
+    (cur: BuildCursor<Self>, each: F) -> BuildCursor<After> {
+        <List<'a, KV>>::deserialize(cur.behind(0), |item_cur| {
+            each(item_cur).behind(0)
+        })
+    }
+}
+
+pub trait Assoc<'a> {
+    type Key: 'a;
+    type Val: 'a;
+
+    unsafe fn key(&self) -> &'a Self::Key;
+    unsafe fn val(&self) -> &'a Self::Val;
+}
+
+pub struct HomoKeyAssoc<'a, K, V> {
+    key: K,
+    _phantom: PhantomData<&'a V>
+}
+
+impl<'a, K, V> HomoKeyAssoc<'a, K, V> {
+    pub unsafe fn deserialize
+    <
+        After,
+        FK: Fn(&mut K),
+        FV: Fn(BuildCursor<V>) -> BuildCursor<After>,
+    >
+    (cur: BuildCursor<Self>, each_k: FK, each_v: FV) -> BuildCursor<After>
+    {
+        each_k(&mut (*cur.get_mut()).key);
+        each_v(cur.behind(1))
+    }
+}
+
+impl<'a, K: 'a, V: 'a> Assoc<'a> for HomoKeyAssoc<'a, K, V> {
+    type Key = K;
+    type Val = V;
+
+    unsafe fn key(&self) -> &'a K { &*(&self.key as *const _) }
+    unsafe fn val(&self) -> &'a V { &*get_behind_struct(self) }
+}
+
+pub struct AssocListIter<'a, 'b, X, KV> {
+    x: &'b X,
+    cur: *const List<'a, KV>,
+}
+
+impl<'a, 'b, KV: 'b + Assoc<'a>, X: Matches<KV::Key>> UnsafeIterator
+for AssocListIter<'a, 'b, X, KV>
+{
+    type Item = &'a KV::Val;
+
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        while let Some(key_val) = self.cur.next() {
+            if self.x.matches(&key_val.key()) { return Some(key_val.val()); }
+        }
+        None
+    }
+}
+
+impl<'a, KV: Assoc<'a>> AssocsSuper<'a> for AssocList<'a, KV> {
+    type Key = KV::Key;
+    type Val = KV::Val;
+    type I<'b, X: 'b + Matches<KV::Key>> = AssocListIter<'a, 'b, X, KV> where 'a: 'b;
+}
+
+impl<'a, KV: Assoc<'a>> Assocs<'a> for AssocList<'a, KV> {
+    unsafe fn iter_matches<'c, 'b, X: Matches<KV::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
+        where 'a: 'b + 'c
+    { AssocListIter { x: key, cur: &self.0 } }
+}
+
+#[repr(C)]
+pub struct BlobVec<'a, X> {
     len: usize,
     _phantom: PhantomData<&'a X>,
 }
 
-struct HomoVecIter<'a, X> {
+pub struct BlobVecIter<'a, X> {
     cur: *const X,
     end: *const X,
     _phantom: PhantomData<&'a X>,
 }
 
-impl<'a, X> HomoVec<'a, X> {
-    unsafe fn iter(&self) -> HomoVecIter<'a, X> {
+impl<'a, X> BlobVec<'a, X> {
+    pub unsafe fn iter(&self) -> BlobVecIter<'a, X> {
         let cur = get_behind_struct::<_, X>(self);
-        HomoVecIter {
+        BlobVecIter {
             cur,
             end: cur.add(self.len),
             _phantom: PhantomData,
         }
     }
 
-    unsafe fn get(&self, ix: usize) -> &X {
+    pub unsafe fn get(&self, ix: usize) -> &X {
         assert!(ix < self.len);
         &*get_behind_struct::<_, X>(self).add(ix)
     }
+
+    pub unsafe fn deserialize<F: Fn(&mut X), After>
+        (cur: BuildCursor<Self>, each: F) -> BuildCursor<After>
+    {
+        let mut xcur = cur.behind(1);
+        for _ in 0..(*cur.get_mut()).len { each(&mut *xcur.get_mut()); xcur.inc(); }
+        xcur.behind(0)
+    }
 }
 
-impl<'a, X> UnsafeIterator for HomoVecIter<'a, X> {
+impl<'a, X> UnsafeIterator for BlobVecIter<'a, X> {
     type Item = &'a X;
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
@@ -222,18 +318,34 @@ impl<'a, X> UnsafeIterator for HomoVecIter<'a, X> {
 }
 
 #[repr(C)]
-struct HomoKeyAssocList<'a, K, V> {
-    keys: HomoVec<'a, (K, *const V)>,
+struct AssocVecmap<'a, K, V> {
+    keys: BlobVec<'a, (K, *const V)>,
     _phantom: PhantomData<&'a V>,
 }
 
-struct HomoKeyAssocListIter<'a, 'b, X, K, V> {
+impl<'a, K, V> AssocVecmap<'a, K, V> {
+    pub unsafe fn deserialize<
+        After,
+        FK: Fn(&mut K),
+        FV: Fn(BuildCursor<V>) -> BuildCursor<V>,
+    >
+    (cur: BuildCursor<Self>, each_k: FK, each_v: FV) -> BuildCursor<After>
+    {
+        let kcur = cur.behind::<BlobVec<'a, (K, *const V)>>(0);
+        let len = (*kcur.get_mut()).len;
+        let mut vcur = BlobVec::deserialize(kcur, |kv| { each_k(&mut kv.0); });
+        for _ in 0..len { vcur = each_v(vcur); }
+        vcur.behind(0)
+    }
+}
+
+struct AssocVecmapIter<'a, 'b, X, K, V> {
     x: &'b X,
-    vec_iter: HomoVecIter<'a, (K, *const V)>,
+    vec_iter: BlobVecIter<'a, (K, *const V)>,
     _phantom: PhantomData<&'a K>,
 }
 
-impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for HomoKeyAssocListIter<'a, 'b, X, K, V> {
+impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for AssocVecmapIter<'a, 'b, X, K, V> {
     type Item = &'a V;
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
@@ -246,17 +358,17 @@ impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for HomoKeyAssocListIter<'a
     }
 }
 
-impl<'a, K: 'a, V: 'a> AssocListSuper<'a> for HomoKeyAssocList<'a, K, V> {
+impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for AssocVecmap<'a, K, V> {
     type Key = K;
     type Val = V;
-    type I<'b, X: 'b + Matches<K>> = HomoKeyAssocListIter<'a, 'b, X, K, V> where 'a: 'b;
+    type I<'b, X: 'b + Matches<K>> = AssocVecmapIter<'a, 'b, X, K, V> where 'a: 'b;
 }
 
-impl<'a, K: 'a, V: 'a> AssocList<'a> for HomoKeyAssocList<'a, K, V> {
+impl<'a, K: 'a, V: 'a> Assocs<'a> for AssocVecmap<'a, K, V> {
     unsafe fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     {
-        HomoKeyAssocListIter {
+        AssocVecmapIter {
             x: key,
             vec_iter: self.keys.iter(),
             _phantom: PhantomData,
@@ -264,16 +376,18 @@ impl<'a, K: 'a, V: 'a> AssocList<'a> for HomoKeyAssocList<'a, K, V> {
     }
 }
 
-type U8States<'a> = HomoVec<'a, *const U8State<'a>>;
-type U8AList<'a> = HomoKeyAlternAssocList<'a, u8, U8States<'a>>;
+type U8States<'a> = BlobVec<'a, *const U8State<'a>>;
+type U8AItem<'a> = HomoKeyAssoc<'a, u8, U8States<'a>>;
+type U8AList<'a> = AssocList<'a, U8AItem<'a>>;
 type U8ExplicitTrans<'a> = BlobHashMap<'a, U8AList<'a>>;
-type U8Tags<'a> = HomoVec<'a, usize>;
+type U8Tags<'a> = BlobVec<'a, usize>;
+type U8PatternTrans<'a> = AssocVecmap<'a, Guard, U8States<'a>>;
 
 #[repr(C)]
 pub struct U8State<'a> {
     tags: *const U8Tags<'a>,
     explicit_trans: *const U8ExplicitTrans<'a>,
-    pattern_trans: HomoKeyAssocList<'a, Guard, HomoVec<'a, *const U8State<'a>>>,
+    pattern_trans: U8PatternTrans<'a>,
 }
 
 impl<'a> U8State<'a> {
@@ -287,11 +401,36 @@ impl<'a> U8State<'a> {
         }
     }
 
+    pub unsafe fn deserialize<B>(state_cur: BuildCursor<U8State>) -> BuildCursor<B> {
+        let shifter = Shifter(state_cur.buf);
+        let shiftq = |q: &mut *const U8State| shifter.shift(q);
+        let shiftqs1 = |qs_cur| U8States::deserialize(qs_cur, shiftq);
+        let shiftqs2 = |qs_cur| U8States::deserialize(qs_cur, shiftq);
+        let state = &mut *state_cur.get_mut();
+        shifter.shift(&mut state.explicit_trans);
+
+        let f_tags_cur = state_cur.behind::<*const U8Tags>(0);
+        let f_explicit_trans_cur = f_tags_cur.behind::<*const U8ExplicitTrans>(1);
+        let f_pattern_trans_cur = f_explicit_trans_cur.behind::<U8PatternTrans>(1);
+        let exp_cur = U8PatternTrans::deserialize(f_pattern_trans_cur, |_| (), shiftqs1);
+
+        let tags_cur: BuildCursor<u8> = U8ExplicitTrans::deserialize(exp_cur, |alist_cur|
+            U8AList::deserialize(alist_cur, |kv_cur|
+                U8AItem::deserialize(kv_cur, |_| (), shiftqs2)
+            )
+        );
+
+        if state.tags.is_null() { tags_cur.behind(0) }
+        else {
+            shifter.shift(&mut state.tags);
+            U8Tags::deserialize(tags_cur.behind(0), |_| ())
+        }
+    }
 }
 
 pub struct U8StateIterator<'a, 'b> {
-    pattern_iter: HomoKeyAssocListIter<'a, 'b, u8, Guard, HomoVec<'a, *const U8State<'a>>>,
-    states_iter: Option<HomoVecIter<'a, *const U8State<'a>>>,
+    pattern_iter: AssocVecmapIter<'a, 'b, u8, Guard, U8States<'a>>,
+    states_iter: Option<BlobVecIter<'a, *const U8State<'a>>>,
     explicit_trans: *const U8ExplicitTrans<'a>,
 }
 
@@ -328,155 +467,115 @@ impl<'a, 'b> UnsafeIterator for U8StateIterator<'a, 'b> where 'a: 'b {
     }
 }
 
-struct U8StatePrepared {
+pub struct U8StatePrepared {
     tags: Vec<usize>,
     pattern_trans: Vec<(Guard, Vec<usize>)>,
     explicit_trans: Vec<Vec<(u8, Vec<usize>)>>,  // has size of 2**hashmap_cap
 }
 
 
-type U8PatternItem<'a> = (Guard, *const U8States<'a>);
-impl U8StatePrepared {
-    fn reserve(&self, sz: &mut Reserve) -> usize {
-        sz.add::<U8State>(0);
-        let result = sz.0;
-        sz.add::<U8State>(1);
-        sz.add::<U8PatternItem>(self.pattern_trans.len());
-        for (_, targets) in self.pattern_trans.iter() {
-            sz.add::<U8States>(1);
-            sz.add::<*const U8State>(targets.len());
-        }
-        sz.add::<U8ExplicitTrans>(1);
-        sz.add::<*const U8AList>(self.explicit_trans.len());
-        for alist in self.explicit_trans.iter() {
-            for (_, targets) in alist.iter() {
-                sz.add::<U8AList>(1);
-                sz.add::<U8States>(1);
-                sz.add::<*const U8State>(targets.len());
-            }
-        }
-        result
-    }
-
-    unsafe fn deserialize(state_ix: &mut BuildIx<U8State>) {
-        let shifter = Shifter(state_ix.buf);
-        let state = &mut *state_ix.get_mut();
-        if !state.tags.is_null() { shifter.shift(&mut state.tags); }
-        shifter.shift(&mut state.explicit_trans);
-
-        let mut item_ix = state_ix.behind::<U8PatternItem>(1);
-        let pattern_trans_len = state.pattern_trans.keys.len;
-        let mut qs_ix = item_ix.behind::<U8States>(pattern_trans_len);
-        for _ in 0..pattern_trans_len {
-            let item = &mut *item_ix.get_mut();
-            shifter.shift(&mut item.1);
-            let mut qix = qs_ix.behind::<*const U8State>(1);
-            for _ in 0..(*qs_ix.get_mut()).len {
-                shifter.shift(&mut *qix.get_mut());
-                qix.inc();
-            }
-            qs_ix = qix.behind(0);
-            item_ix.inc();
-        }
-
-        let exp_ix = qs_ix.behind::<U8ExplicitTrans>(0);
-        let mut arr_ix = exp_ix.behind::<*const U8AList>(1);
-        let hashmap_cap = (*exp_ix.get_mut()).mask + 1;
-        let mut alist_ix = arr_ix.behind::<U8AList>(hashmap_cap);
-        for _ in 0..hashmap_cap {
-            let arr_ptr = arr_ix.get_mut();
-            if !(*arr_ptr).is_null() {
-                shifter.shift(&mut *arr_ptr);
-                loop {
-                    let alist = &mut *alist_ix.get_mut();
-                    let qs_ix = alist_ix.behind::<U8States>(1);
-                    let mut qix = qs_ix.behind::<*const U8State>(1);
-                    for _ in 0..(*qs_ix.get_mut()).len {
-                        shifter.shift(&mut *qix.get_mut());
-                        qix.inc();
-                    }
-                    alist_ix = qix.behind(0);
-                    if alist.next.is_null() { break; }
-                    shifter.shift(&mut alist.next);
-                }
-            }
-            arr_ix.inc()
-        }
-    }
-
-    unsafe fn serialize(&self, buf: *mut u8, ix: usize, ptrs: &Vec<usize>) {
-        let state_ix = BuildIx::<U8State> { ix: ptrs[ix], buf, _phantom: PhantomData };
-        assert!(state_ix.ix == align_up(state_ix.ix, align_of::<U8State>()));
-
-        let mut item_ix = state_ix.behind::<U8PatternItem>(1);
-        let mut qs_ix = item_ix.behind::<U8States>(self.pattern_trans.len());
-        for (guard, qs) in self.pattern_trans.iter() {
-            *item_ix.get_mut() = (*guard, qs_ix.ix as *mut U8States);
-            *qs_ix.get_mut() = HomoVec { len: qs.len(), _phantom: PhantomData };
-            let mut qix = qs_ix.behind::<*const U8State>(1);
-            for &q in qs {
-                *qix.get_mut() = ptrs[q] as *const U8State;
-                qix.inc();
-            }
-            qs_ix = qix.behind(0);
-            item_ix.inc();
-        }
-
-        let exp_ix = qs_ix.behind::<U8ExplicitTrans>(0);
-        *exp_ix.get_mut() = BlobHashMap
-            { mask: self.explicit_trans.len() - 1, _phantom: PhantomData };
-        let mut arr_ix = exp_ix.behind::<*const U8AList>(1);
-        let mut alist_ix = arr_ix.behind::<U8AList>(self.explicit_trans.len());
-        for arritem_trans in self.explicit_trans.iter() {
-            if arritem_trans.is_empty() {
-                *arr_ix.get_mut() = ptr::null();
-            } else {
-                *arr_ix.get_mut() = alist_ix.ix as *const U8AList;
-
-                for (i, (guard, qs)) in arritem_trans.iter().enumerate() {
-                    let qs_ix = alist_ix.behind::<U8States>(1);
-                    *qs_ix.get_mut() = HomoVec { len: qs.len(), _phantom: PhantomData };
-
-                    let mut qix = qs_ix.behind::<*const U8State>(1);
-                    for &q in qs {
-                        *qix.get_mut() = ptrs[q] as *const U8State;
-                        qix.inc();
-                    }
-
-                    let alist_ptr = alist_ix.get_mut();
-                    alist_ix = qix.behind(0);
-                    let next =
-                        if i == arritem_trans.len() - 1 { ptr::null() }
-                        else { alist_ix.ix as *const U8AList };
-                    *alist_ptr = U8AList { key: *guard, next, _phantom: PhantomData };
-                }
-            }
-            arr_ix.inc()
-        }
-
-        let tag_ptr =
-            if self.tags.is_empty() { ptr::null() }
-            else {
-                let tags_ix = alist_ix.behind::<U8Tags>(0);
-                *tags_ix.get_mut() = HomoVec { len: self.tags.len(), _phantom: PhantomData };
-                let mut tag_ix = tags_ix.behind::<usize>(1);
-                for &tag in self.tags.iter() {
-                    *tag_ix.get_mut() = tag;
-                    tag_ix.inc();
-                }
-                tags_ix.ix as *const U8Tags
-            };
-
-        *state_ix.get_mut() = U8State {
-            tags: tag_ptr,
-            explicit_trans: exp_ix.ix as *const U8ExplicitTrans,
-            pattern_trans: HomoKeyAssocList {
-                keys: HomoVec { len: self.pattern_trans.len(), _phantom: PhantomData },
-                _phantom: PhantomData,
-            }
-        }
-    }
-}
+// impl U8StatePrepared {
+//     pub fn reserve(&self, sz: &mut Reserve) -> usize {
+//         sz.add::<U8State>(0);
+//         let result = sz.0;
+//         sz.add::<U8State>(1);
+//         sz.add::<U8PatternItem>(self.pattern_trans.len());
+//         for (_, targets) in self.pattern_trans.iter() {
+//             sz.add::<U8States>(1);
+//             sz.add::<*const U8State>(targets.len());
+//         }
+//         sz.add::<U8ExplicitTrans>(1);
+//         sz.add::<*const U8AList>(self.explicit_trans.len());
+//         for alist in self.explicit_trans.iter() {
+//             for (_, targets) in alist.iter() {
+//                 sz.add::<U8AList>(1);
+//                 sz.add::<U8AItem>(1);
+//                 sz.add::<U8States>(1);
+//                 sz.add::<*const U8State>(targets.len());
+//             }
+//         }
+//         result
+//     }
+// 
+//     pub unsafe fn serialize(&self, buf: *mut u8, ix: usize, ptrs: &Vec<usize>) {
+//         let state_cur = BuildCursor::<U8State> { cur: ptrs[ix], buf, _phantom: PhantomData };
+//         assert!(state_cur.cur == align_up(state_cur.cur, align_of::<U8State>()));
+// 
+//         let exp_cur = {
+//             let mut item_cur = state_cur.behind::<U8PatternItem>(1);
+//             let mut qs_cur = item_cur.behind::<U8States>(self.pattern_trans.len());
+//             for (guard, qs) in self.pattern_trans.iter() {
+//                 *item_cur.get_mut() = (*guard, qs_cur.cur as *mut U8States);
+//                 *qs_cur.get_mut() = BlobVec { len: qs.len(), _phantom: PhantomData };
+//                 let mut qcur = qs_cur.behind::<*const U8State>(1);
+//                 for &q in qs {
+//                     *qcur.get_mut() = ptrs[q] as *const U8State;
+//                     qcur.inc();
+//                 }
+//                 qs_cur = qcur.behind(0);
+//                 item_cur.inc();
+//             }
+//             qs_cur.behind::<U8ExplicitTrans>(0)
+//         };
+//         *exp_cur.get_mut() = BlobHashMap
+//             { mask: self.explicit_trans.len() - 1, _phantom: PhantomData };
+//         let tags_cur = {
+//             let mut arr_cur = exp_cur.behind::<*const U8AList>(1);
+//             let mut alist_cur = arr_cur.behind::<U8AList>(self.explicit_trans.len());
+//             for arritem_trans in self.explicit_trans.iter() {
+//                 if arritem_trans.is_empty() {
+//                     *arr_cur.get_mut() = ptr::null();
+//                 } else {
+//                     *arr_cur.get_mut() = alist_cur.cur as *const U8AList;
+// 
+//                     for (i, (guard, qs)) in arritem_trans.iter().enumerate() {
+//                         let gqs_cur = alist_cur.behind::<U8AItem>(1);
+//                         (*gqs_cur.get_mut()).0 = *guard;
+//                         let qs_cur = gqs_cur.behind::<U8States>(1);
+//                         *qs_cur.get_mut() = BlobVec { len: qs.len(), _phantom: PhantomData };
+// 
+//                         let mut qcur = qs_cur.behind::<*const U8State>(1);
+//                         for &q in qs {
+//                             *qcur.get_mut() = ptrs[q] as *const U8State;
+//                             qcur.inc();
+//                         }
+// 
+//                         let alist_ptr = alist_cur.get_mut();
+//                         alist_cur = qcur.behind(0);
+//                         let next =
+//                             if i == arritem_trans.len() - 1 { ptr::null() }
+//                             else { alist_cur.cur as *const U8List };
+//                         *alist_ptr = U8AList { list: U8List { next, _phantom: PhantomData } };
+//                     }
+//                 }
+//                 arr_cur.inc()
+//             }
+//             alist_cur
+//         };
+// 
+//         let tag_ptr =
+//             if self.tags.is_empty() { ptr::null() }
+//             else {
+//                 let tags_cur = tags_cur.behind::<U8Tags>(0);
+//                 *tags_cur.get_mut() = BlobVec { len: self.tags.len(), _phantom: PhantomData };
+//                 let mut tag_cur = tags_cur.behind::<usize>(1);
+//                 for &tag in self.tags.iter() {
+//                     *tag_cur.get_mut() = tag;
+//                     tag_cur.inc();
+//                 }
+//                 tags_cur.cur as *const U8Tags
+//             };
+// 
+//         *state_cur.get_mut() = U8State {
+//             tags: tag_ptr,
+//             explicit_trans: exp_cur.cur as *const U8ExplicitTrans,
+//             pattern_trans: AssocVecmap {
+//                 keys: BlobVec { len: self.pattern_trans.len(), _phantom: PhantomData },
+//                 _phantom: PhantomData,
+//             }
+//         }
+//     }
+// }
 
 
 mod build {
@@ -489,7 +588,7 @@ mod build {
     }
 
     impl U8StatePrepared {
-        fn prepare<Cfg: U8BuildConfig>(old: &char_nfa::State, cfg: &Cfg) -> Self {
+        pub fn prepare<Cfg: U8BuildConfig>(old: &char_nfa::State, cfg: &Cfg) -> Self {
             let mut pattern_trans0 = HashMap::<Guard, Vec<usize>>::new();
             let mut explicitized_guard_trans = Vec::<(Guard, usize)>::new();
             for (guard, target) in old.transitions.iter().copied() {
