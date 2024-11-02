@@ -5,6 +5,7 @@ pub trait Monoid {
     fn append(&mut self, other: &Self);
 }
 
+#[repr(C)]
 #[derive(Hash, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 pub struct Guard(pub u128, pub u128);
 

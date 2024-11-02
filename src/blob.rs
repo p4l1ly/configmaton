@@ -101,7 +101,7 @@ impl Shifter {
 }
 
 #[repr(C)]
-struct BlobHashMap<'a, AList> {
+pub struct BlobHashMap<'a, AList> {
     mask: usize,
     _phantom: PhantomData<&'a AList>,
 }
@@ -142,13 +142,48 @@ impl<'a, AList> BlobHashMap<'a, AList> {
     }
 }
 
+impl<'a, AList: Build> Build for BlobHashMap<'a, AList> {
+    type Origin = Vec<AList::Origin>;
+}
+
+pub trait IsEmpty {
+    fn is_empty(&self) -> bool;
+}
+
+impl<X> IsEmpty for Vec<X> {
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl<'a, AList: Build> BlobHashMap<'a, AList> where AList::Origin: IsEmpty {
+    pub fn reserve
+    <
+        R,
+        F: Fn(&AList::Origin, &mut Reserve) -> R,
+    >
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> (usize, Vec<R>) {
+        sz.add::<Self>(0);
+        let my_addr = sz.0;
+        sz.add::<Self>(1);
+        sz.add::<*const AList>(origin.len());
+        let mut results = Vec::with_capacity(origin.len());
+        for alist in origin.iter() {
+            if !alist.is_empty() {
+                results.push(f(alist, sz));
+            }
+        }
+        (my_addr, results)
+    }
+}
+
 pub trait AssocsSuper<'a> {
     type Key: 'a;
     type Val: 'a;
     type I<'b, X: 'b + Matches<Self::Key>>: UnsafeIterator<Item = &'a Self::Val> where 'a: 'b;
 }
 
-trait Assocs<'a>: AssocsSuper<'a> {
+pub trait Assocs<'a>: AssocsSuper<'a> {
     unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c;
 }
@@ -187,6 +222,21 @@ impl<'a, X> List<'a, X> {
     }
 }
 
+impl<'a, X: Build> Build for List<'a, X> {
+    type Origin = Vec<X::Origin>;
+}
+
+impl<'a, X: Build> List<'a, X> {
+    pub fn reserve<
+        R,
+        F: Fn(&X::Origin, &mut Reserve) -> R,
+    >(origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> Vec<R> {
+        let mut results = Vec::with_capacity(origin.len());
+        for x in origin.iter() { results.push(f(x, sz)); }
+        results
+    }
+}
+
 #[repr(C)]
 pub struct AssocList<'a, KV>(List<'a, KV>);
 
@@ -203,6 +253,19 @@ impl<'a, KV> AssocList<'a, KV> {
     }
 }
 
+impl<'a, KV: Build> Build for AssocList<'a, KV> {
+    type Origin = Vec<KV::Origin>;
+}
+
+impl<'a, KV: Build> AssocList<'a, KV> {
+    pub fn reserve<
+        R,
+        F: Fn(&KV::Origin, &mut Reserve) -> R,
+    >(origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> Vec<R> {
+        <List<'a, KV>>::reserve(origin, sz, f)
+    }
+}
+
 pub trait Assoc<'a> {
     type Key: 'a;
     type Val: 'a;
@@ -211,6 +274,7 @@ pub trait Assoc<'a> {
     unsafe fn val(&self) -> &'a Self::Val;
 }
 
+#[repr(C)]
 pub struct HomoKeyAssoc<'a, K, V> {
     key: K,
     _phantom: PhantomData<&'a V>
@@ -227,6 +291,22 @@ impl<'a, K, V> HomoKeyAssoc<'a, K, V> {
     {
         each_k(&mut (*cur.get_mut()).key);
         each_v(cur.behind(1))
+    }
+}
+
+impl<'a, K: Build, V: Build> Build for HomoKeyAssoc<'a, K, V> {
+    type Origin = (K::Origin, V::Origin);
+}
+
+impl<'a, K: Build, V: Build> HomoKeyAssoc<'a, K, V> {
+    pub fn reserve<RV, FV: Fn(&V::Origin, &mut Reserve) -> RV>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, RV)
+    {
+        sz.add::<Self>(0);
+        let my_addr = sz.0;
+        sz.add::<Self>(1);
+        let rv = fv(&origin.1, sz);
+        (my_addr, rv)
     }
 }
 
@@ -268,6 +348,22 @@ impl<'a, KV: Assoc<'a>> Assocs<'a> for AssocList<'a, KV> {
     { AssocListIter { x: key, cur: &self.0 } }
 }
 
+pub trait Build {
+    type Origin;
+}
+
+impl Build for u8 {
+    type Origin = u8;
+}
+
+impl Build for Guard {
+    type Origin = Guard;
+}
+
+impl<'a, X: Build> Build for BlobVec<'a, X> {
+    type Origin = Vec<X::Origin>;
+}
+
 #[repr(C)]
 pub struct BlobVec<'a, X> {
     len: usize,
@@ -304,6 +400,20 @@ impl<'a, X> BlobVec<'a, X> {
     }
 }
 
+impl<'a, X: Build> BlobVec<'a, X> {
+    pub fn reserve(origin: &<Self as Build>::Origin, sz: &mut Reserve) -> usize {
+        sz.add::<Self>(0);
+        let my_addr = sz.0;
+        sz.add::<Self>(1);
+        sz.add::<X>(origin.len());
+        my_addr
+    }
+
+    pub fn elem_addr(my_addr: usize, ix: usize) -> usize {
+        align_up(my_addr + size_of::<Self>(), align_of::<X>()) + size_of::<X>() * ix
+    }
+}
+
 impl<'a, X> UnsafeIterator for BlobVecIter<'a, X> {
     type Item = &'a X;
 
@@ -318,12 +428,45 @@ impl<'a, X> UnsafeIterator for BlobVecIter<'a, X> {
 }
 
 #[repr(C)]
-struct AssocVecmap<'a, K, V> {
-    keys: BlobVec<'a, (K, *const V)>,
+pub struct VecmapItem<K, V> {
+    key: K,
+    val: *const V,
+}
+
+impl<K: Build, V: Build> Build for VecmapItem<K, V> {
+    type Origin = (K::Origin, V::Origin);
+}
+
+type VecmapVec<'a, K, V> = BlobVec<'a, VecmapItem<K, V>>;
+
+#[repr(C)]
+pub struct Vecmap<'a, K, V> {
+    keys: VecmapVec<'a, K, V>,
     _phantom: PhantomData<&'a V>,
 }
 
-impl<'a, K, V> AssocVecmap<'a, K, V> {
+impl<'a, K: Build, V: Build> Build for Vecmap<'a, K, V> {
+    type Origin = Vec<(K::Origin, V::Origin)>;
+}
+
+impl<'a, K: Build, V: Build> Vecmap<'a, K, V> {
+    pub fn reserve<
+        RV,
+        FV: Fn(&V::Origin, &mut Reserve) -> RV,
+    >
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, Vec<RV>) {
+        let my_addr = <VecmapVec<'a, K, V>>::reserve(origin, sz);
+        let mut vaddrs = Vec::with_capacity(origin.len());
+        for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
+        (my_addr, vaddrs)
+    }
+
+    pub fn key_addr(my_addr: usize, ix: usize) -> usize {
+        <VecmapVec<'a, K, V>>::elem_addr(my_addr, ix)
+    }
+}
+
+impl<'a, K, V> Vecmap<'a, K, V> {
     pub unsafe fn deserialize<
         After,
         FK: Fn(&mut K),
@@ -331,25 +474,25 @@ impl<'a, K, V> AssocVecmap<'a, K, V> {
     >
     (cur: BuildCursor<Self>, each_k: FK, each_v: FV) -> BuildCursor<After>
     {
-        let kcur = cur.behind::<BlobVec<'a, (K, *const V)>>(0);
+        let kcur = cur.behind::<VecmapVec<'a, K, V>>(0);
         let len = (*kcur.get_mut()).len;
-        let mut vcur = BlobVec::deserialize(kcur, |kv| { each_k(&mut kv.0); });
+        let mut vcur = BlobVec::deserialize(kcur, |kv| { each_k(&mut kv.key); });
         for _ in 0..len { vcur = each_v(vcur); }
         vcur.behind(0)
     }
 }
 
-struct AssocVecmapIter<'a, 'b, X, K, V> {
+pub struct VecmapIter<'a, 'b, X, K, V> {
     x: &'b X,
-    vec_iter: BlobVecIter<'a, (K, *const V)>,
+    vec_iter: BlobVecIter<'a, VecmapItem<K, V>>,
     _phantom: PhantomData<&'a K>,
 }
 
-impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for AssocVecmapIter<'a, 'b, X, K, V> {
+impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for VecmapIter<'a, 'b, X, K, V> {
     type Item = &'a V;
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
-        while let Some((key, val)) = self.vec_iter.next() {
+        while let Some(VecmapItem{ key, val }) = self.vec_iter.next() {
             if self.x.matches(key) {
                 return Some(&**val);
             }
@@ -358,17 +501,17 @@ impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for AssocVecmapIter<'a, 'b,
     }
 }
 
-impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for AssocVecmap<'a, K, V> {
+impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for Vecmap<'a, K, V> {
     type Key = K;
     type Val = V;
-    type I<'b, X: 'b + Matches<K>> = AssocVecmapIter<'a, 'b, X, K, V> where 'a: 'b;
+    type I<'b, X: 'b + Matches<K>> = VecmapIter<'a, 'b, X, K, V> where 'a: 'b;
 }
 
-impl<'a, K: 'a, V: 'a> Assocs<'a> for AssocVecmap<'a, K, V> {
+impl<'a, K: 'a, V: 'a> Assocs<'a> for Vecmap<'a, K, V> {
     unsafe fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     {
-        AssocVecmapIter {
+        VecmapIter {
             x: key,
             vec_iter: self.keys.iter(),
             _phantom: PhantomData,
@@ -381,13 +524,25 @@ type U8AItem<'a> = HomoKeyAssoc<'a, u8, U8States<'a>>;
 type U8AList<'a> = AssocList<'a, U8AItem<'a>>;
 type U8ExplicitTrans<'a> = BlobHashMap<'a, U8AList<'a>>;
 type U8Tags<'a> = BlobVec<'a, usize>;
-type U8PatternTrans<'a> = AssocVecmap<'a, Guard, U8States<'a>>;
+type U8PatternTrans<'a> = Vecmap<'a, Guard, U8States<'a>>;
+
+impl Build for *const U8State<'_> {
+    type Origin = usize;
+}
+
+impl Build for usize {
+    type Origin = usize;
+}
 
 #[repr(C)]
 pub struct U8State<'a> {
     tags: *const U8Tags<'a>,
     explicit_trans: *const U8ExplicitTrans<'a>,
     pattern_trans: U8PatternTrans<'a>,
+}
+
+impl<'a> Build for U8State<'a> {
+    type Origin = U8StatePrepared;
 }
 
 impl<'a> U8State<'a> {
@@ -426,10 +581,31 @@ impl<'a> U8State<'a> {
             U8Tags::deserialize(tags_cur.behind(0), |_| ())
         }
     }
+
+    fn resqs(qs: &Vec<usize>, sz: &mut Reserve) {
+        U8States::reserve(qs, sz);
+    }
+
+    pub fn reserve(origin: &<Self as Build>::Origin, sz: &mut Reserve) -> usize {
+        sz.add::<U8State>(0);
+        let result = sz.0;
+        sz.add::<*const U8Tags>(1);
+        sz.add::<*const U8ExplicitTrans>(1);
+        U8PatternTrans::reserve(&origin.pattern_trans, sz, Self::resqs);
+        U8ExplicitTrans::reserve(&origin.explicit_trans, sz, |alist, sz| {
+            U8AList::reserve(alist, sz, |kv, sz| {
+                U8AItem::reserve(kv, sz, Self::resqs);
+            });
+        });
+        if !origin.tags.is_empty() {
+            U8Tags::reserve(&origin.tags, sz);
+        }
+        result
+    }
 }
 
 pub struct U8StateIterator<'a, 'b> {
-    pattern_iter: AssocVecmapIter<'a, 'b, u8, Guard, U8States<'a>>,
+    pattern_iter: VecmapIter<'a, 'b, u8, Guard, U8States<'a>>,
     states_iter: Option<BlobVecIter<'a, *const U8State<'a>>>,
     explicit_trans: *const U8ExplicitTrans<'a>,
 }
@@ -475,28 +651,6 @@ pub struct U8StatePrepared {
 
 
 // impl U8StatePrepared {
-//     pub fn reserve(&self, sz: &mut Reserve) -> usize {
-//         sz.add::<U8State>(0);
-//         let result = sz.0;
-//         sz.add::<U8State>(1);
-//         sz.add::<U8PatternItem>(self.pattern_trans.len());
-//         for (_, targets) in self.pattern_trans.iter() {
-//             sz.add::<U8States>(1);
-//             sz.add::<*const U8State>(targets.len());
-//         }
-//         sz.add::<U8ExplicitTrans>(1);
-//         sz.add::<*const U8AList>(self.explicit_trans.len());
-//         for alist in self.explicit_trans.iter() {
-//             for (_, targets) in alist.iter() {
-//                 sz.add::<U8AList>(1);
-//                 sz.add::<U8AItem>(1);
-//                 sz.add::<U8States>(1);
-//                 sz.add::<*const U8State>(targets.len());
-//             }
-//         }
-//         result
-//     }
-// 
 //     pub unsafe fn serialize(&self, buf: *mut u8, ix: usize, ptrs: &Vec<usize>) {
 //         let state_cur = BuildCursor::<U8State> { cur: ptrs[ix], buf, _phantom: PhantomData };
 //         assert!(state_cur.cur == align_up(state_cur.cur, align_of::<U8State>()));
@@ -569,7 +723,7 @@ pub struct U8StatePrepared {
 //         *state_cur.get_mut() = U8State {
 //             tags: tag_ptr,
 //             explicit_trans: exp_cur.cur as *const U8ExplicitTrans,
-//             pattern_trans: AssocVecmap {
+//             pattern_trans: Vecmap {
 //                 keys: BlobVec { len: self.pattern_trans.len(), _phantom: PhantomData },
 //                 _phantom: PhantomData,
 //             }
