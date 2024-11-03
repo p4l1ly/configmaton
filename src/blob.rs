@@ -122,7 +122,7 @@ pub trait AssocsSuper<'a> {
 }
 
 pub trait Assocs<'a>: AssocsSuper<'a> {
-    unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c;
 }
 
@@ -417,7 +417,7 @@ impl<'a, KV: Assoc<'a>> AssocsSuper<'a> for AssocList<'a, KV> {
 }
 
 impl<'a, KV: Assoc<'a>> Assocs<'a> for AssocList<'a, KV> {
-    unsafe fn iter_matches<'c, 'b, X: Matches<KV::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    fn iter_matches<'c, 'b, X: Matches<KV::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     { AssocListIter { x: key, cur: &self.0 } }
 }
@@ -451,11 +451,11 @@ pub struct BlobVecIter<'a, X> {
 }
 
 impl<'a, X> BlobVec<'a, X> {
-    pub unsafe fn iter(&self) -> BlobVecIter<'a, X> {
-        let cur = get_behind_struct::<_, X>(self);
+    pub fn iter(&self) -> BlobVecIter<'a, X> {
+        let cur = unsafe { get_behind_struct::<_, X>(self) };
         BlobVecIter {
             cur,
-            end: cur.add(self.len),
+            end: unsafe { cur.add(self.len) },
             _phantom: PhantomData,
         }
     }
@@ -617,7 +617,7 @@ impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for Vecmap<'a, K, V> {
 }
 
 impl<'a, K: 'a, V: 'a> Assocs<'a> for Vecmap<'a, K, V> {
-    unsafe fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     {
         VecmapIter {
@@ -655,7 +655,7 @@ impl<'a> Build for U8State<'a> {
 }
 
 impl<'a> U8State<'a> {
-    pub unsafe fn iter_matches<'c, 'b>(&'c self, key: &'b u8) -> U8StateIterator<'a, 'b>
+    pub fn iter_matches<'c, 'b>(&'c self, key: &'b u8) -> U8StateIterator<'a, 'b>
         where 'a: 'b + 'c
     {
         U8StateIterator {
@@ -874,7 +874,7 @@ pub mod tests {
         assert_eq!(unsafe { blobvec.get(0) }, &1);
         assert_eq!(unsafe { blobvec.get(1) }, &3);
         assert_eq!(unsafe { blobvec.get(2) }, &5);
-        let mut iter = unsafe { blobvec.iter() };
+        let mut iter = blobvec.iter();
         assert_eq!(unsafe { iter.next() }, Some(&1));
         assert_eq!(unsafe { iter.next() }, Some(&3));
         assert_eq!(unsafe { iter.next() }, Some(&5));
@@ -906,12 +906,12 @@ pub mod tests {
         let vecmap = unsafe {
             &*(buf.as_ptr().add(addr.0) as *const Vecmap::<usize, BlobVec<u8>>) };
 
-        let mut iter = unsafe { vecmap.iter_matches(&EqMatch(&3)) };
+        let mut iter = vecmap.iter_matches(&EqMatch(&3));
         let (k, v) = unsafe { iter.next().unwrap() };
         assert_eq!((k, unsafe { v.as_ref() }), (&3, b"hello".as_ref()));
         assert_eq!(unsafe { iter.next() }.is_none(), true);
 
-        let mut iter = unsafe { vecmap.iter_matches(&AnyMatch) };
+        let mut iter = vecmap.iter_matches(&AnyMatch);
         let (k, v) = unsafe { iter.next().unwrap() };
         assert_eq!((k, unsafe { v.as_ref() }), (&1, b"foo".as_ref()));
         let (k, v) = unsafe { iter.next().unwrap() };
@@ -971,37 +971,23 @@ pub mod tests {
         assert_eq!(unsafe { hash.get(&3).unwrap().as_ref() }, b"hello".as_ref());
     }
 
-    struct TestU8BuildConfig;
+    pub struct TestU8BuildConfig;
     impl U8BuildConfig for TestU8BuildConfig {
         fn guard_size_keep(&self) -> u32 { 2 }
         fn hashmap_cap_power_fn(&self, _len: usize) -> usize { 1 }
     }
 
-    #[test]
-    fn test_states() {
-        let state0 = char_nfa::State {
-            tags: OrderedIxs(vec![]),
-            transitions: vec![
-                (Guard::from_range((b'a', b'a')), 0),
-                (Guard::from_range((b'a', b'a')), 1),
-                (Guard::from_range((b'c', b'z')), 1),
-            ],
-            is_deterministic: false,
-        };
-        let state1 = char_nfa::State {
-            tags: OrderedIxs(vec![1, 2]),
-            transitions: vec![(Guard::from_range((b'b', b'b')), 0)],
-            is_deterministic: false,
-        };
-        let states = vec![state0, state1];
-        let states = states.iter().map(|q|
+    pub unsafe fn create_states<'a>(buf: &'a mut Vec<u8>, qs: Vec<char_nfa::State>)
+        -> Vec<&'a U8State<'a>>
+    {
+        let states = qs.iter().map(|q|
             U8StatePrepared::prepare(&q, &TestU8BuildConfig)).collect();
         let mut sz = Reserve(0);
         let (list_addr, addrs) = List::<U8State>::reserve(&states, &mut sz, |state, sz| {
             U8State::reserve(state, sz)
         });
         assert_eq!(list_addr, 0);
-        let mut buf = vec![0u8; sz.0 + size_of::<usize>()];
+        buf.resize(sz.0 + size_of::<usize>(), 0);
         let buf = align_up_ptr::<u128>(buf.as_mut_ptr());
         let mut cur = BuildCursor::new(buf);
         cur = unsafe { List::<U8State>::serialize(&states, cur, |state, state_cur| {
@@ -1014,14 +1000,38 @@ pub mod tests {
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let list = unsafe { &*(buf as *const List<U8State>) };
         let mut iter = list as *const List<U8State>;
-        let state0 = unsafe { iter.next() }.unwrap();
-        let state1 = unsafe { iter.next() }.unwrap();
+        let result = (0..qs.len()).map(|_| iter.next().unwrap()).collect::<Vec<_>>();
+        assert!(unsafe { iter.next() }.is_none());
+        result
+    }
+
+    #[test]
+    fn test_states() {
+        let states = vec![
+            char_nfa::State {
+                tags: OrderedIxs(vec![]),
+                transitions: vec![
+                    (Guard::from_range((b'a', b'a')), 0),
+                    (Guard::from_range((b'a', b'a')), 1),
+                    (Guard::from_range((b'c', b'z')), 1),
+                ],
+                is_deterministic: false,
+            },
+            char_nfa::State {
+                tags: OrderedIxs(vec![1, 2]),
+                transitions: vec![(Guard::from_range((b'b', b'b')), 0)],
+                is_deterministic: false,
+            },
+        ];
+        let mut buf = vec![];
+        let states = unsafe { create_states(&mut buf, states) };
+        let state0 = states[0];
+        let state1 = states[1];
+
+        let mut iter = state0.iter_matches(&b'b');
         assert!(unsafe { iter.next() }.is_none());
 
-        let mut iter = unsafe { state0.iter_matches(&b'b') };
-        assert!(unsafe { iter.next() }.is_none());
-
-        let mut iter = unsafe { state0.iter_matches(&b'a') };
+        let mut iter = state0.iter_matches(&b'a');
         let mut succs = vec![
             unsafe { iter.next() }.unwrap(),
             unsafe { iter.next() }.unwrap(),
@@ -1030,7 +1040,7 @@ pub mod tests {
         succs.sort();
         assert_eq!(succs, [state0 as *const U8State, state1]);
 
-        let mut iter = unsafe { state0.iter_matches(&b'p') };
+        let mut iter = state0.iter_matches(&b'p');
         let succs = vec![unsafe { iter.next() }.unwrap()];
         assert!(unsafe { iter.next() }.is_none());
         assert_eq!(succs, vec![state1 as *const U8State]);

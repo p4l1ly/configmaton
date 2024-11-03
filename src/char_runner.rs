@@ -1,89 +1,35 @@
-use hashbrown::HashMap;
 use indexmap::IndexSet;
-use smallvec::SmallVec;
 
-use crate::guards::Guard;
-use crate::borrow_lock::Lock;
-
-pub enum AnyStateLock<'a> {
-    Sparse(&'a SparseState<'a>),
-    Dense(&'a DenseState<'a>),
-}
-
-pub struct SparseState<'a> {
-    pub explicit_trans: HashMap<u8, SmallVec<[AnyStateLock<'a>; 1]>>,
-    pub pattern_trans: Box<[(Guard, SmallVec<[AnyStateLock<'a>; 1]>)]>,
-    pub tags: Vec<usize>,
-}
-
-pub struct DenseState<'a> {
-    pub trans: [SmallVec<[AnyStateLock<'a>; 1]>; 256],
-    pub tags: Vec<usize>,
-}
+use crate::blob::{U8State, UnsafeIterator};
 
 pub struct Runner<'a> {
     // Mapping from symbols to such current states from which a transition via the symbol exists.
-    pub sparse_states: IndexSet<Lock<'a, SparseState<'a>>>,
-    pub dense_states: IndexSet<Lock<'a, DenseState<'a>>>,
+    pub states: IndexSet<*const U8State<'a>>,
 }
 
 impl<'a> Runner<'a>
 {
     // Initialize the state of the automaton.
-    pub fn new<'b, I: IntoIterator<Item = &'b AnyStateLock<'a>>>(initial_states: I) -> Self
-        where 'a: 'b
-    {
-        let mut result = Runner {
-            sparse_states: IndexSet::new(),
-            dense_states: IndexSet::new(),
-        };
-        for any_state_lock in initial_states.into_iter() {
-            result.add_right_state(any_state_lock);
-        }
-        result
+    pub fn new<I: IntoIterator<Item = *const U8State<'a>>>(initial_states: I) -> Self {
+        Runner { states: initial_states.into_iter().collect() }
     }
 
     // Read a symbol, perform transitions.
-    pub fn read(&mut self, symbol: u8) {
-        dbg!(&self.sparse_states);
-        let sparse_states = std::mem::take(&mut self.sparse_states);
-        let dense_states = std::mem::take(&mut self.dense_states);
+    pub unsafe fn read(&mut self, symbol: u8) {
+        let states = std::mem::take(&mut self.states);
 
         // Finally, let's handle the self-handling states.
-        for state_lock in sparse_states.into_iter() {
-            let state = state_lock.0;
-            state.explicit_trans.get(&symbol).map(|rights|
-                for right in rights.iter() { self.add_right_state(right) }
-            );
-            for (pattern, rights) in state.pattern_trans.iter() {
-                if pattern.contains(symbol) {
-                    for right in rights.iter() { self.add_right_state(right) }
-                }
+        for state in states.into_iter() {
+            let state = &*state;
+            let mut iter = state.iter_matches(&symbol);
+            while let Some(right) = iter.next() {
+                self.states.insert(right);
             }
         }
-
-        for state_lock in dense_states.into_iter() {
-            let rights = &state_lock.0.trans[symbol as usize];
-            for right in rights.iter() { self.add_right_state(right) }
-        }
     }
 
-    pub fn get_tags(&self) -> Vec<usize> {
-        let mut result = Vec::new();
-        for state_lock in self.sparse_states.iter() {
-            result.extend(state_lock.0.tags.iter().cloned());
-        }
-        for state_lock in self.dense_states.iter() {
-            result.extend(state_lock.0.tags.iter().cloned());
-        }
-        result
-    }
-
-    fn add_right_state(&mut self, any_state_lock: &AnyStateLock<'a>) {
-        match any_state_lock {
-            AnyStateLock::Sparse(state) => self.sparse_states.insert(Lock(state)),
-            AnyStateLock::Dense(state) => self.dense_states.insert(Lock(state)),
-        };
+    pub unsafe fn get_tags<'b>(&'b self) -> impl Iterator<Item = usize> + 'b {
+        self.states.iter().flat_map(|state| (&**state).get_tags().iter().cloned())
     }
 }
 
@@ -91,82 +37,40 @@ impl<'a> Runner<'a>
 mod tests {
     use hashbrown::HashSet;
 
+    use crate::{blob::tests::create_states, char_enfa::OrderedIxs, char_nfa, guards::Guard};
+
     use super::*;
 
-    fn new_state<'a>(tag: usize) -> SparseState<'a> {
-        let result = SparseState {
-            explicit_trans: HashMap::new(),
-            pattern_trans: Box::new([]),
-            tags: vec![tag],
-        };
-        result
-    }
-
-    fn set_explicit<'a>(
-        state: &mut SparseState<'a>,
-        c: u8,
-        right: &'a SparseState<'a>,
-    ) {
-        let right = AnyStateLock::Sparse(right);
-        state.explicit_trans.entry(c).or_insert_with(SmallVec::new).push(right);
-    }
-
-    fn set_pattern<'a>(
-        state: &mut SparseState<'a>,
-        guard: Guard,
-        right: &'a SparseState<'a>,
-    ) {
-        let right = AnyStateLock::Sparse(right);
-        let mut trans = std::mem::take(&mut state.pattern_trans).into_vec();
-        trans.push((guard, SmallVec::from_buf([right])));
-        state.pattern_trans = trans.into_boxed_slice();
+    fn new_state(
+        tag: usize,
+        transitions: Vec<(u8, u8, usize)>,
+    ) -> char_nfa::State {
+        char_nfa::State {
+            tags: OrderedIxs(vec![tag]),
+            transitions: transitions.into_iter().map(|(a, b, q)|
+                (Guard::from_range((a, b)), q)
+            ).collect(),
+            is_deterministic: false,
+        }
     }
 
     #[test]
     fn explicit_works() {
         let (a, b, c) = (0, 1, 2);
 
-        let mut qs = vec![new_state(0), new_state(1), new_state(2), new_state(3)];
-        unsafe {
-            for (left, c, right) in [
-                (0, a, 1),
-                (0, b, 0),
-                (0, c, 0),
-
-                (1, b, 2),
-
-                (2, a, 2),
-                (2, b, 2),
-                (2, c, 0),
-                (2, c, 3),
-
-                (3, a, 3),
-                (3, b, 0),
-                (3, c, 3),
-            ] {
-                let right = &*(&qs[right] as *const _);
-                set_explicit(&mut qs[left], c, right);
-            }
-        }
-
-        let pats = [
-            Guard::from_ranges(vec![(0, 0), (2, 255)]),
+        let qs = vec![
+            new_state(0, vec![(a, a, 1), (b, c, 0)]),
+            new_state(1, vec![(a, a, 1), (b, b, 2), (c, 255, 1)]),
+            new_state(2, vec![(a, b, 2), (c, c, 0), (c, c, 3)]),
+            new_state(3, vec![(a, a, 3), (b, b, 0), (c, c, 3)]),
         ];
-        let nb = 0;
+        let mut buf = vec![];
+        let qs = unsafe { create_states(&mut buf, qs) };
 
-        unsafe {
-            for (left, pat, right) in [
-                (1, nb, 1),
-            ] {
-                let right = &*(&qs[right] as *const _);
-                set_pattern(&mut qs[left], pats[pat].clone(), right);
-            }
-        }
-
-        let mut automaton = Runner::new(vec![&AnyStateLock::Sparse(unsafe{&*(&qs[0] as *const _)})]);
+        let mut automaton = Runner::new([qs[0] as *const _]);
         let mut read_and_check_trans = |sym: u8, expected: Vec<usize>| {
-            automaton.read(sym);
-            let real = automaton.get_tags().into_iter().collect::<HashSet<_>>();
+            unsafe { automaton.read(sym) };
+            let real = unsafe { automaton.get_tags() }.into_iter().collect::<HashSet<_>>();
             let expected = expected.into_iter().collect::<HashSet<_>>();
             assert_eq!(real, expected);
         };
