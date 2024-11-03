@@ -26,27 +26,33 @@ impl MyHash for &[u8] {
 }
 
 pub trait Matches<T> {
-    fn matches(&self, other: &T) -> bool;
+    unsafe fn matches(&self, other: &T) -> bool;
 }
 
 pub struct EqMatch<'a, X>(pub &'a X);
 
 impl<'a, X: Eq> Matches<X> for EqMatch<'a, X> {
-    fn matches(&self, other: &X) -> bool {
+    unsafe fn matches(&self, other: &X) -> bool {
         *self.0 == *other
     }
 }
 
 impl Matches<Guard> for u8 {
-    fn matches(&self, other: &Guard) -> bool {
+    unsafe fn matches(&self, other: &Guard) -> bool {
         other.contains(*self)
+    }
+}
+
+impl<'a, 'b> Matches<BlobVec<'a, u8>> for &'b [u8] {
+    unsafe fn matches(&self, other: &BlobVec<'a, u8>) -> bool {
+        *self == other.as_ref()
     }
 }
 
 pub struct AnyMatch;
 
 impl<T> Matches<T> for AnyMatch {
-    fn matches(&self, _: &T) -> bool { true }
+    unsafe fn matches(&self, _: &T) -> bool { true }
 }
 
 pub trait UnsafeIterator {
@@ -151,10 +157,10 @@ impl<'a, AList: Assocs<'a>> BlobHashMap<'a, AList> {
 impl<'a, AList> BlobHashMap<'a, AList> {
     pub unsafe fn deserialize
     <
-        F: Fn(BuildCursor<AList>) -> BuildCursor<AList>,
+        F: FnMut(BuildCursor<AList>) -> BuildCursor<AList>,
         After,
     >
-    (cur: BuildCursor<Self>, f: F) -> BuildCursor<After> {
+    (cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After> {
         let mut arr_cur = cur.behind::<*const AList>(1);
         let hashmap_cap = (*cur.get_mut()).mask + 1;
         let mut alist_cur = arr_cur.behind::<AList>(hashmap_cap);
@@ -245,8 +251,8 @@ impl<'a, X> UnsafeIterator for *const List<'a, X> {
 
 impl<'a, X> List<'a, X> {
     pub unsafe fn deserialize
-    <F: Fn(BuildCursor<X>) -> BuildCursor<Self>, After>
-    (mut cur: BuildCursor<Self>, f: F) -> BuildCursor<After>
+    <F: FnMut(BuildCursor<X>) -> BuildCursor<Self>, After>
+    (mut cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
     {
         loop {
             let alist = &mut *cur.get_mut();
@@ -300,7 +306,7 @@ pub struct AssocList<'a, KV>(List<'a, KV>);
 impl<'a, KV> AssocList<'a, KV> {
     pub unsafe fn deserialize
     <
-        F: Fn(BuildCursor<KV>) -> BuildCursor<List<'a, KV>>,
+        F: FnMut(BuildCursor<KV>) -> BuildCursor<List<'a, KV>>,
         After,
     >
     (cur: BuildCursor<Self>, f: F) -> BuildCursor<After> {
@@ -346,10 +352,10 @@ impl<'a, K, V> HomoKeyAssoc<'a, K, V> {
     pub unsafe fn deserialize
     <
         After,
-        FK: Fn(&mut K),
-        FV: Fn(BuildCursor<V>) -> BuildCursor<After>,
+        FK: FnMut(&mut K),
+        FV: FnMut(BuildCursor<V>) -> BuildCursor<After>,
     >
-    (cur: BuildCursor<Self>, fk: FK, fv: FV) -> BuildCursor<After>
+    (cur: BuildCursor<Self>, mut fk: FK, mut fv: FV) -> BuildCursor<After>
     {
         fk(&mut (*cur.get_mut()).key);
         fv(cur.behind(1))
@@ -471,8 +477,8 @@ impl<'a, X> BlobVec<'a, X> {
         std::slice::from_raw_parts(get_behind_struct::<_, X>(self), self.len)
     }
 
-    pub unsafe fn deserialize<F: Fn(&mut X), After>
-    (cur: BuildCursor<Self>, f: F) -> BuildCursor<After>
+    pub unsafe fn deserialize<F: FnMut(&mut X), After>
+    (cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
     {
         let mut xcur = cur.behind(1);
         for _ in 0..(*cur.get_mut()).len { f(&mut *xcur.get_mut()); xcur.inc(); }
@@ -531,7 +537,6 @@ type VecMapVec<'a, K, V> = BlobVec<'a, VecMapItem<K, V>>;
 #[repr(C)]
 pub struct VecMap<'a, K, V> {
     keys: VecMapVec<'a, K, V>,
-    _phantom: PhantomData<&'a V>,
 }
 
 impl<'a, K: Build, V: Build> Build for VecMap<'a, K, V> {
@@ -543,6 +548,7 @@ impl<'a, K: Build, V: Build> VecMap<'a, K, V> {
     (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, Vec<RV>)
     {
         let my_addr = <VecMapVec<'a, K, V>>::reserve(origin, sz);
+        sz.add::<V>(0);
         let mut vaddrs = Vec::with_capacity(origin.len());
         for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
         (my_addr, vaddrs)
@@ -576,10 +582,10 @@ impl<'a, K: Build, V: Build> VecMap<'a, K, V> {
 impl<'a, K, V> VecMap<'a, K, V> {
     pub unsafe fn deserialize<
         After,
-        FK: Fn(&mut K),
-        FV: Fn(BuildCursor<V>) -> BuildCursor<V>,
+        FK: FnMut(&mut K),
+        FV: FnMut(BuildCursor<V>) -> BuildCursor<V>,
     >
-    (cur: BuildCursor<Self>, fk: FK, fv: FV) -> BuildCursor<After>
+    (cur: BuildCursor<Self>, mut fk: FK, mut fv: FV) -> BuildCursor<After>
     {
         let kcur = cur.behind::<VecMapVec<'a, K, V>>(0);
         let len = (*kcur.get_mut()).len;
@@ -621,13 +627,120 @@ impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for VecMap<'a, K, V> {
 impl<'a, K: 'a, V: 'a> Assocs<'a> for VecMap<'a, K, V> {
     fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
+    { VecMapIter { x: key, vec_iter: self.keys.iter(), _phantom: PhantomData } }
+}
+
+#[repr(C)]
+pub struct ListMapItem<K, V> {
+    val: *const V,
+    _phantom: PhantomData<K>,
+}
+
+impl<K: Build, V: Build> Build for ListMapItem<K, V> {
+    type Origin = (K::Origin, V::Origin);
+}
+
+type ListMapList<'a, K, V> = List<'a, ListMapItem<K, V>>;
+
+#[repr(C)]
+pub struct ListMap<'a, K, V> {
+    keys: ListMapList<'a, K, V>,
+}
+
+impl<'a, K: Build, V: Build> Build for ListMap<'a, K, V> {
+    type Origin = Vec<(K::Origin, V::Origin)>;
+}
+
+impl<'a, K: Build, V: Build> ListMap<'a, K, V> {
+    pub fn reserve<
+        RK, RV,
+        FK: Fn(&K::Origin, &mut Reserve) -> RK,
+        FV: Fn(&V::Origin, &mut Reserve) -> RV,
+    >
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fk: FK, fv: FV) -> (usize, Vec<RK>, Vec<RV>)
     {
-        VecMapIter {
-            x: key,
-            vec_iter: self.keys.iter(),
-            _phantom: PhantomData,
-        }
+        let (my_addr, kaddrs) = <ListMapList<'a, K, V>>::reserve(origin, sz,
+            |(k, _), sz| { sz.add::<ListMapItem<K, V>>(1); fk(k, sz) });
+        sz.add::<V>(0);
+        let mut vaddrs = Vec::with_capacity(origin.len());
+        for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
+        (my_addr, kaddrs, vaddrs)
     }
+
+    pub unsafe fn serialize
+    <
+        After,
+        FK: FnMut(&K::Origin, BuildCursor<K>) -> BuildCursor<ListMapList<'a, K, V>>,
+        FV: FnMut(&V::Origin, BuildCursor<V>) -> BuildCursor<V>,
+    >
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut fk: FK, mut fv: FV)
+    -> BuildCursor<After>
+    {
+        let kcur = cur.behind::<ListMapList<'a, K, V>>(0);
+        let mut item_curs = Vec::with_capacity(origin.len());
+        let mut vcur = <ListMapList<'a, K, V>>::serialize(origin, kcur, |kv, item_cur| {
+            item_curs.push(item_cur.clone());
+            fk(&kv.0, item_cur.behind(1))
+        });
+        for (kv, item_cur) in origin.iter().zip(item_curs) {
+            (*item_cur.get_mut()).val = vcur.cur as *const V;
+            vcur = fv(&kv.1, vcur);
+        }
+        vcur.behind(0)
+    }
+}
+
+impl<'a, K, V> ListMap<'a, K, V> {
+    pub unsafe fn deserialize<
+        After,
+        FK: FnMut(BuildCursor<K>) -> BuildCursor<ListMapList<'a, K, V>>,
+        FV: FnMut(BuildCursor<V>) -> BuildCursor<V>,
+    >
+    (cur: BuildCursor<Self>, mut fk: FK, mut fv: FV) -> BuildCursor<After>
+    {
+        let kcur = cur.behind::<ListMapList<'a, K, V>>(0);
+        let mut len = 0;
+        let shifter = Shifter(cur.buf);
+        let mut vcur = ListMapList::deserialize(kcur, |item_cur| {
+            len += 1;
+            shifter.shift(&mut (*item_cur.get_mut()).val);
+            fk(item_cur.behind(1))
+        });
+        for _ in 0..len { vcur = fv(vcur); }
+        vcur.behind(0)
+    }
+}
+
+pub struct ListMapIter<'a, 'b, X, K, V> {
+    x: &'b X,
+    list_iter: *const List<'a, ListMapItem<K, V>>,
+    _phantom: PhantomData<&'a K>,
+}
+
+impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for ListMapIter<'a, 'b, X, K, V> {
+    type Item = (&'a K, &'a V);
+
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        while let Some(item) = self.list_iter.next() {
+            let key = get_behind_struct::<_, K>(item);
+            if self.x.matches(&*key) {
+                return Some((&*key, &*item.val));
+            }
+        }
+        None
+    }
+}
+
+impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for ListMap<'a, K, V> {
+    type Key = K;
+    type Val = V;
+    type I<'b, X: 'b + Matches<K>> = ListMapIter<'a, 'b, X, K, V> where 'a: 'b;
+}
+
+impl<'a, K: 'a, V: 'a> Assocs<'a> for ListMap<'a, K, V> {
+    fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
+        where 'a: 'b + 'c
+    { ListMapIter { x: key, list_iter: &self.keys, _phantom: PhantomData } }
 }
 
 type U8States<'a> = BlobVec<'a, *const U8State<'a>>;
@@ -924,6 +1037,44 @@ pub mod tests {
         assert_eq!((k, unsafe { v.as_ref() }), (&3, b"hello".as_ref()));
         let (k, v) = unsafe { iter.next().unwrap() };
         assert_eq!((k, unsafe { v.as_ref() }), (&5, b"".as_ref()));
+    }
+
+    #[test]
+    pub fn test_listmap() {
+        let origin = vec![
+            (b"aa".to_vec(), b"foo".to_vec()),
+            (b"bb".to_vec(), b"hello".to_vec()),
+            (b"aa".to_vec(), b"".to_vec()),
+        ];
+        let mut sz = Reserve(1);
+        let addr = ListMap::<BlobVec<u8>, BlobVec<u8>>::reserve(&origin, &mut sz,
+            |x, sz| { BlobVec::<u8>::reserve(x, sz); },
+            |x, sz| { BlobVec::<u8>::reserve(x, sz); },
+        );
+        assert_eq!(addr.0, if align_of::<usize>() == 1 { 0 } else { align_of::<usize>() });
+        let mut buf = vec![0u8; sz.0];
+        let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr.0) });
+        cur = unsafe { ListMap::<BlobVec<u8>, BlobVec<u8>>::serialize(&origin, cur,
+            |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }) },
+            |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }) },
+        )};
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr.0) });
+        cur = unsafe { ListMap::<BlobVec<u8>, BlobVec<u8>>::deserialize(cur,
+            |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
+            |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
+        )};
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let vecmap = unsafe {
+            &*(buf.as_ptr().add(addr.0) as *const ListMap::<BlobVec<u8>, BlobVec<u8>>) };
+
+        let key = b"aa".as_ref();
+        let mut iter = vecmap.iter_matches(&key);
+        let (k, v) = unsafe { iter.next().unwrap() };
+        assert_eq!(unsafe { (k.as_ref(), v.as_ref()) }, (b"aa".as_ref(), b"foo".as_ref()));
+        let (k, v) = unsafe { iter.next().unwrap() };
+        assert_eq!(unsafe { (k.as_ref(), v.as_ref()) }, (b"aa".as_ref(), b"".as_ref()));
+        assert_eq!(unsafe { iter.next() }.is_none(), true);
     }
 
     #[test]
