@@ -1,3 +1,5 @@
+// WARNING: No endianness handling is implemented yet, as we have no use case for BigEndian.
+
 use std::mem::{size_of, align_of};
 use std::marker::PhantomData;
 use std::ptr;
@@ -643,6 +645,10 @@ impl Build for usize {
     type Origin = usize;
 }
 
+impl Build for () {
+    type Origin = ();
+}
+
 #[repr(C)]
 pub struct U8State<'a> {
     tags: *const U8Tags<'a>,
@@ -981,26 +987,26 @@ pub mod tests {
         -> Vec<&'a U8State<'a>>
     {
         let states = qs.iter().map(|q|
-            U8StatePrepared::prepare(&q, &TestU8BuildConfig)).collect();
+            ((), U8StatePrepared::prepare(&q, &TestU8BuildConfig))).collect();
         let mut sz = Reserve(0);
-        let (list_addr, addrs) = List::<U8State>::reserve(&states, &mut sz, |state, sz| {
+        let (list_addr, addrs) = Vecmap::<(), U8State>::reserve(&states, &mut sz, |state, sz| {
             U8State::reserve(state, sz)
         });
         assert_eq!(list_addr, 0);
         buf.resize(sz.0 + size_of::<usize>(), 0);
         let buf = align_up_ptr::<u128>(buf.as_mut_ptr());
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe { List::<U8State>::serialize(&states, cur, |state, state_cur| {
-            U8State::serialize(state, state_cur, &addrs)
-        })};
+        cur = unsafe { Vecmap::<(), U8State>::serialize(&states, cur, |_, _| (),
+            |state, state_cur| { U8State::serialize(state, state_cur, &addrs) }
+        )};
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe {
-            List::<U8State>::deserialize(cur, |state_cur| U8State::deserialize(state_cur)) };
+        cur = unsafe { Vecmap::<(), U8State>::deserialize(cur, |_| (),
+            |state_cur| U8State::deserialize(state_cur)) };
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
-        let list = unsafe { &*(buf as *const List<U8State>) };
-        let mut iter = list as *const List<U8State>;
-        let result = (0..qs.len()).map(|_| iter.next().unwrap()).collect::<Vec<_>>();
+        let vecmap = unsafe { &*(buf as *const Vecmap<(), U8State>) };
+        let mut iter = vecmap.iter_matches(&AnyMatch);
+        let result = (0..qs.len()).map(|_| iter.next().unwrap().1).collect::<Vec<_>>();
         assert!(unsafe { iter.next() }.is_none());
         result
     }
