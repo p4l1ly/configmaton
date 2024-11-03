@@ -126,7 +126,7 @@ impl<'a, AList> BlobHashMap<'a, AList> {
         F: Fn(BuildCursor<AList>) -> BuildCursor<AList>,
         After,
     >
-    (cur: BuildCursor<Self>, each: F) -> BuildCursor<After> {
+    (cur: BuildCursor<Self>, f: F) -> BuildCursor<After> {
         let mut arr_cur = cur.behind::<*const AList>(1);
         let hashmap_cap = (*cur.get_mut()).mask + 1;
         let mut alist_cur = arr_cur.behind::<AList>(hashmap_cap);
@@ -134,7 +134,7 @@ impl<'a, AList> BlobHashMap<'a, AList> {
             let arr_ptr = arr_cur.get_mut();
             if !(*arr_ptr).is_null() {
                 Shifter(cur.buf).shift(&mut *arr_ptr);
-                alist_cur = each(alist_cur);
+                alist_cur = f(alist_cur);
             }
             arr_cur.inc();
         }
@@ -157,11 +157,7 @@ impl<X> IsEmpty for Vec<X> {
 }
 
 impl<'a, AList: Build> BlobHashMap<'a, AList> where AList::Origin: IsEmpty {
-    pub fn reserve
-    <
-        R,
-        F: Fn(&AList::Origin, &mut Reserve) -> R,
-    >
+    pub fn reserve<R, F: Fn(&AList::Origin, &mut Reserve) -> R>
     (origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> (usize, Vec<R>) {
         sz.add::<Self>(0);
         let my_addr = sz.0;
@@ -174,6 +170,28 @@ impl<'a, AList: Build> BlobHashMap<'a, AList> where AList::Origin: IsEmpty {
             }
         }
         (my_addr, results)
+    }
+
+    pub unsafe fn serialize
+    <
+        F: FnMut(&AList::Origin, BuildCursor<AList>) -> BuildCursor<AList>,
+        After,
+    >
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
+    {
+        (*cur.get_mut()).mask = origin.len() - 1;
+        let mut arr_cur = cur.behind::<*const AList>(1);
+        let mut alist_cur = arr_cur.behind::<AList>(origin.len());
+        for alist_origin in origin.iter() {
+            if alist_origin.is_empty() {
+                *arr_cur.get_mut() = ptr::null();
+            } else {
+                *arr_cur.get_mut() = alist_cur.cur as *const AList;
+                alist_cur = f(alist_origin, alist_cur);
+            }
+            arr_cur.inc()
+        }
+        alist_cur.behind(0)
     }
 }
 
@@ -211,11 +229,11 @@ impl<'a, X> UnsafeIterator for *const List<'a, X> {
 impl<'a, X> List<'a, X> {
     pub unsafe fn deserialize
     <F: Fn(BuildCursor<X>) -> BuildCursor<Self>, After>
-    (mut cur: BuildCursor<Self>, each: F) -> BuildCursor<After>
+    (mut cur: BuildCursor<Self>, f: F) -> BuildCursor<After>
     {
         loop {
             let alist = &mut *cur.get_mut();
-            cur = each(cur.behind(1));
+            cur = f(cur.behind(1));
             if alist.next.is_null() { return cur.behind(0); }
             Shifter(cur.buf).shift(&mut alist.next);
         }
@@ -227,13 +245,35 @@ impl<'a, X: Build> Build for List<'a, X> {
 }
 
 impl<'a, X: Build> List<'a, X> {
-    pub fn reserve<
-        R,
-        F: Fn(&X::Origin, &mut Reserve) -> R,
-    >(origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> Vec<R> {
+    pub fn reserve<R, F: Fn(&X::Origin, &mut Reserve) -> R>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> (usize, Vec<R>)
+    {
+        sz.add::<Self>(0);
+        let my_addr = sz.0;
         let mut results = Vec::with_capacity(origin.len());
-        for x in origin.iter() { results.push(f(x, sz)); }
-        results
+        for x in origin.iter() { sz.add::<Self>(1); results.push(f(x, sz)); }
+        sz.add::<Self>(0);
+        (my_addr, results)
+    }
+
+    pub unsafe fn serialize
+    <
+        After,
+        F: FnMut(&X::Origin, BuildCursor<X>) -> BuildCursor<Self>,
+    >
+    (origin: &<Self as Build>::Origin, mut cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
+    {
+        for (i, x) in origin.iter().enumerate() {
+            if i == origin.len() - 1 {
+                (*cur.get_mut()).next = ptr::null();
+                cur = f(x, cur.behind(1));
+            } else {
+                let next = &mut (*cur.get_mut()).next;
+                cur = f(x, cur.behind(1));
+                *next = cur.cur as *const Self;
+            }
+        }
+        cur.behind(0)
     }
 }
 
@@ -243,13 +283,11 @@ pub struct AssocList<'a, KV>(List<'a, KV>);
 impl<'a, KV> AssocList<'a, KV> {
     pub unsafe fn deserialize
     <
-        F: Fn(BuildCursor<KV>) -> BuildCursor<Self>,
+        F: Fn(BuildCursor<KV>) -> BuildCursor<List<'a, KV>>,
         After,
     >
-    (cur: BuildCursor<Self>, each: F) -> BuildCursor<After> {
-        <List<'a, KV>>::deserialize(cur.behind(0), |item_cur| {
-            each(item_cur).behind(0)
-        })
+    (cur: BuildCursor<Self>, f: F) -> BuildCursor<After> {
+        <List<'a, KV>>::deserialize(cur.behind(0), f)
     }
 }
 
@@ -258,11 +296,18 @@ impl<'a, KV: Build> Build for AssocList<'a, KV> {
 }
 
 impl<'a, KV: Build> AssocList<'a, KV> {
-    pub fn reserve<
-        R,
-        F: Fn(&KV::Origin, &mut Reserve) -> R,
-    >(origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> Vec<R> {
-        <List<'a, KV>>::reserve(origin, sz, f)
+    pub fn reserve<R, F: Fn(&KV::Origin, &mut Reserve) -> R>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> (usize, Vec<R>)
+    { <List<'a, KV>>::reserve(origin, sz, f) }
+
+    pub unsafe fn serialize
+    <
+        After,
+        F: FnMut(&KV::Origin, BuildCursor<KV>) -> BuildCursor<List<'a, KV>>,
+    >
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, f: F) -> BuildCursor<After>
+    {
+        <List<'a, KV>>::serialize(origin, cur.behind(0), f)
     }
 }
 
@@ -287,10 +332,10 @@ impl<'a, K, V> HomoKeyAssoc<'a, K, V> {
         FK: Fn(&mut K),
         FV: Fn(BuildCursor<V>) -> BuildCursor<After>,
     >
-    (cur: BuildCursor<Self>, each_k: FK, each_v: FV) -> BuildCursor<After>
+    (cur: BuildCursor<Self>, fk: FK, fv: FV) -> BuildCursor<After>
     {
-        each_k(&mut (*cur.get_mut()).key);
-        each_v(cur.behind(1))
+        fk(&mut (*cur.get_mut()).key);
+        fv(cur.behind(1))
     }
 }
 
@@ -307,6 +352,19 @@ impl<'a, K: Build, V: Build> HomoKeyAssoc<'a, K, V> {
         sz.add::<Self>(1);
         let rv = fv(&origin.1, sz);
         (my_addr, rv)
+    }
+
+    pub unsafe fn serialize
+    <
+        After,
+        FK: FnMut(&K::Origin, &mut K),
+        FV: FnMut(&V::Origin, BuildCursor<V>) -> BuildCursor<After>,
+    >
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut fk: FK, mut fv: FV)
+    -> BuildCursor<After>
+    {
+        fk(&origin.0, &mut (*cur.get_mut()).key);
+        fv(&origin.1, cur.behind(1))
     }
 }
 
@@ -392,10 +450,10 @@ impl<'a, X> BlobVec<'a, X> {
     }
 
     pub unsafe fn deserialize<F: Fn(&mut X), After>
-        (cur: BuildCursor<Self>, each: F) -> BuildCursor<After>
+    (cur: BuildCursor<Self>, f: F) -> BuildCursor<After>
     {
         let mut xcur = cur.behind(1);
-        for _ in 0..(*cur.get_mut()).len { each(&mut *xcur.get_mut()); xcur.inc(); }
+        for _ in 0..(*cur.get_mut()).len { f(&mut *xcur.get_mut()); xcur.inc(); }
         xcur.behind(0)
     }
 }
@@ -411,6 +469,15 @@ impl<'a, X: Build> BlobVec<'a, X> {
 
     pub fn elem_addr(my_addr: usize, ix: usize) -> usize {
         align_up(my_addr + size_of::<Self>(), align_of::<X>()) + size_of::<X>() * ix
+    }
+
+    pub unsafe fn serialize<F: FnMut(&X::Origin, &mut X), After>
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
+    {
+        (*cur.get_mut()).len = origin.len();
+        let mut xcur = cur.behind(1);
+        for x in origin.iter() { f(x, &mut *xcur.get_mut()); xcur.inc(); }
+        xcur.behind(0)
     }
 }
 
@@ -450,11 +517,9 @@ impl<'a, K: Build, V: Build> Build for Vecmap<'a, K, V> {
 }
 
 impl<'a, K: Build, V: Build> Vecmap<'a, K, V> {
-    pub fn reserve<
-        RV,
-        FV: Fn(&V::Origin, &mut Reserve) -> RV,
-    >
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, Vec<RV>) {
+    pub fn reserve<RV, FV: Fn(&V::Origin, &mut Reserve) -> RV>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, Vec<RV>)
+    {
         let my_addr = <VecmapVec<'a, K, V>>::reserve(origin, sz);
         let mut vaddrs = Vec::with_capacity(origin.len());
         for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
@@ -464,6 +529,26 @@ impl<'a, K: Build, V: Build> Vecmap<'a, K, V> {
     pub fn key_addr(my_addr: usize, ix: usize) -> usize {
         <VecmapVec<'a, K, V>>::elem_addr(my_addr, ix)
     }
+
+    pub unsafe fn serialize
+    <
+        After,
+        FK: FnMut(&K::Origin, &mut K),
+        FV: FnMut(&V::Origin, BuildCursor<V>) -> BuildCursor<V>,
+    >
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut fk: FK, mut fv: FV)
+    -> BuildCursor<After>
+    {
+        let kcur = cur.behind::<VecmapVec<'a, K, V>>(0);
+        let item_cur = kcur.behind::<VecmapItem<K, V>>(1);
+        let mut vcur = item_cur.behind::<V>(origin.len());
+        <VecmapVec<'a, K, V>>::serialize::<_, V>(origin, kcur, |kv, bk| {
+            fk(&kv.0, &mut bk.key);
+            bk.val = vcur.cur as *const V;
+            vcur = fv(&kv.1, vcur.clone());
+        });
+        vcur.behind(0)
+    }
 }
 
 impl<'a, K, V> Vecmap<'a, K, V> {
@@ -472,12 +557,12 @@ impl<'a, K, V> Vecmap<'a, K, V> {
         FK: Fn(&mut K),
         FV: Fn(BuildCursor<V>) -> BuildCursor<V>,
     >
-    (cur: BuildCursor<Self>, each_k: FK, each_v: FV) -> BuildCursor<After>
+    (cur: BuildCursor<Self>, fk: FK, fv: FV) -> BuildCursor<After>
     {
         let kcur = cur.behind::<VecmapVec<'a, K, V>>(0);
         let len = (*kcur.get_mut()).len;
-        let mut vcur = BlobVec::deserialize(kcur, |kv| { each_k(&mut kv.key); });
-        for _ in 0..len { vcur = each_v(vcur); }
+        let mut vcur = BlobVec::deserialize(kcur, |kv| { fk(&mut kv.key); });
+        for _ in 0..len { vcur = fv(vcur); }
         vcur.behind(0)
     }
 }
@@ -602,6 +687,37 @@ impl<'a> U8State<'a> {
         }
         result
     }
+
+    pub unsafe fn serialize<After>
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, qptrs: &Vec<usize>)
+    -> BuildCursor<After>
+    {
+        let state = &mut *cur.get_mut();
+        let setq = |q: &usize, qref: &mut *const U8State| { *qref = qptrs[*q] as *const U8State; };
+        let f_tags_cur = cur.behind::<*const U8Tags>(0);
+        let f_explicit_trans_cur = f_tags_cur.behind::<*const U8ExplicitTrans>(1);
+        let f_pattern_trans_cur = f_explicit_trans_cur.behind::<U8PatternTrans>(1);
+        let exp_cur = U8PatternTrans::serialize(
+            &origin.pattern_trans, f_pattern_trans_cur,
+            |guard, guardref| { *guardref = *guard; },
+            |qs, qs_cur| { U8States::serialize(qs, qs_cur, setq) }
+        );
+        let tags_cur: BuildCursor<u8> = U8ExplicitTrans::serialize(
+            &origin.explicit_trans, exp_cur, |alist, alist_cur| {
+                U8AList::serialize(alist, alist_cur, |kv, kv_cur| {
+                    U8AItem::serialize(kv, kv_cur, |c, c_cur| { *c_cur = *c; },
+                        |qs, qs_cur| { U8States::serialize(qs, qs_cur, setq) }
+                    )
+                })
+            }
+        );
+        if origin.tags.is_empty() { tags_cur.behind(0) }
+        else {
+            let tags_cur = tags_cur.behind(0);
+            state.tags = tags_cur.cur as *const U8Tags;
+            U8Tags::serialize(&origin.tags, tags_cur, |t, tref| { *tref = *t; })
+        }
+    }
 }
 
 pub struct U8StateIterator<'a, 'b> {
@@ -648,88 +764,6 @@ pub struct U8StatePrepared {
     pattern_trans: Vec<(Guard, Vec<usize>)>,
     explicit_trans: Vec<Vec<(u8, Vec<usize>)>>,  // has size of 2**hashmap_cap
 }
-
-
-// impl U8StatePrepared {
-//     pub unsafe fn serialize(&self, buf: *mut u8, ix: usize, ptrs: &Vec<usize>) {
-//         let state_cur = BuildCursor::<U8State> { cur: ptrs[ix], buf, _phantom: PhantomData };
-//         assert!(state_cur.cur == align_up(state_cur.cur, align_of::<U8State>()));
-// 
-//         let exp_cur = {
-//             let mut item_cur = state_cur.behind::<U8PatternItem>(1);
-//             let mut qs_cur = item_cur.behind::<U8States>(self.pattern_trans.len());
-//             for (guard, qs) in self.pattern_trans.iter() {
-//                 *item_cur.get_mut() = (*guard, qs_cur.cur as *mut U8States);
-//                 *qs_cur.get_mut() = BlobVec { len: qs.len(), _phantom: PhantomData };
-//                 let mut qcur = qs_cur.behind::<*const U8State>(1);
-//                 for &q in qs {
-//                     *qcur.get_mut() = ptrs[q] as *const U8State;
-//                     qcur.inc();
-//                 }
-//                 qs_cur = qcur.behind(0);
-//                 item_cur.inc();
-//             }
-//             qs_cur.behind::<U8ExplicitTrans>(0)
-//         };
-//         *exp_cur.get_mut() = BlobHashMap
-//             { mask: self.explicit_trans.len() - 1, _phantom: PhantomData };
-//         let tags_cur = {
-//             let mut arr_cur = exp_cur.behind::<*const U8AList>(1);
-//             let mut alist_cur = arr_cur.behind::<U8AList>(self.explicit_trans.len());
-//             for arritem_trans in self.explicit_trans.iter() {
-//                 if arritem_trans.is_empty() {
-//                     *arr_cur.get_mut() = ptr::null();
-//                 } else {
-//                     *arr_cur.get_mut() = alist_cur.cur as *const U8AList;
-// 
-//                     for (i, (guard, qs)) in arritem_trans.iter().enumerate() {
-//                         let gqs_cur = alist_cur.behind::<U8AItem>(1);
-//                         (*gqs_cur.get_mut()).0 = *guard;
-//                         let qs_cur = gqs_cur.behind::<U8States>(1);
-//                         *qs_cur.get_mut() = BlobVec { len: qs.len(), _phantom: PhantomData };
-// 
-//                         let mut qcur = qs_cur.behind::<*const U8State>(1);
-//                         for &q in qs {
-//                             *qcur.get_mut() = ptrs[q] as *const U8State;
-//                             qcur.inc();
-//                         }
-// 
-//                         let alist_ptr = alist_cur.get_mut();
-//                         alist_cur = qcur.behind(0);
-//                         let next =
-//                             if i == arritem_trans.len() - 1 { ptr::null() }
-//                             else { alist_cur.cur as *const U8List };
-//                         *alist_ptr = U8AList { list: U8List { next, _phantom: PhantomData } };
-//                     }
-//                 }
-//                 arr_cur.inc()
-//             }
-//             alist_cur
-//         };
-// 
-//         let tag_ptr =
-//             if self.tags.is_empty() { ptr::null() }
-//             else {
-//                 let tags_cur = tags_cur.behind::<U8Tags>(0);
-//                 *tags_cur.get_mut() = BlobVec { len: self.tags.len(), _phantom: PhantomData };
-//                 let mut tag_cur = tags_cur.behind::<usize>(1);
-//                 for &tag in self.tags.iter() {
-//                     *tag_cur.get_mut() = tag;
-//                     tag_cur.inc();
-//                 }
-//                 tags_cur.cur as *const U8Tags
-//             };
-// 
-//         *state_cur.get_mut() = U8State {
-//             tags: tag_ptr,
-//             explicit_trans: exp_cur.cur as *const U8ExplicitTrans,
-//             pattern_trans: Vecmap {
-//                 keys: BlobVec { len: self.pattern_trans.len(), _phantom: PhantomData },
-//                 _phantom: PhantomData,
-//             }
-//         }
-//     }
-// }
 
 
 mod build {
