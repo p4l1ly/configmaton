@@ -41,6 +41,12 @@ impl Matches<Guard> for u8 {
     }
 }
 
+pub struct AnyMatch;
+
+impl<T> Matches<T> for AnyMatch {
+    fn matches(&self, _: &T) -> bool { true }
+}
+
 pub trait UnsafeIterator {
     type Item;
     unsafe fn next(&mut self) -> Option<Self::Item>;
@@ -48,6 +54,10 @@ pub trait UnsafeIterator {
 
 fn align_up(offset: usize, align: usize) -> usize {
     (offset + align - 1) & !(align - 1)
+}
+
+pub fn align_up_ptr<A>(a: *mut u8) -> *mut u8 {
+    align_up(a as usize, align_of::<A>()) as *mut u8
 }
 
 unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
@@ -70,6 +80,10 @@ pub struct BuildCursor<A>{
 }
 
 impl<A> BuildCursor<A> {
+    pub fn new(buf: *mut u8) -> Self {
+        Self { cur: 0, buf, _phantom: PhantomData }
+    }
+
     pub fn inc(&mut self) {
         self.cur += size_of::<A>();
     }
@@ -100,6 +114,18 @@ impl Shifter {
     }
 }
 
+pub trait AssocsSuper<'a> {
+    type Key: 'a;
+    type Val: 'a;
+    type I<'b, X: 'b + Matches<Self::Key>>: UnsafeIterator<Item = (&'a Self::Key, &'a Self::Val)>
+        where 'a: 'b;
+}
+
+pub trait Assocs<'a>: AssocsSuper<'a> {
+    unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
+        where 'a: 'b + 'c;
+}
+
 #[repr(C)]
 pub struct BlobHashMap<'a, AList> {
     mask: usize,
@@ -116,7 +142,7 @@ impl<'a, AList: Assocs<'a>> BlobHashMap<'a, AList> {
             return None;
         }
         let alist = &*alist_ptr;
-        alist.iter_matches(&EqMatch(key)).next()
+        alist.iter_matches(&EqMatch(key)).next().map(|(_, val)| val)
     }
 }
 
@@ -193,17 +219,6 @@ impl<'a, AList: Build> BlobHashMap<'a, AList> where AList::Origin: IsEmpty {
         }
         alist_cur.behind(0)
     }
-}
-
-pub trait AssocsSuper<'a> {
-    type Key: 'a;
-    type Val: 'a;
-    type I<'b, X: 'b + Matches<Self::Key>>: UnsafeIterator<Item = &'a Self::Val> where 'a: 'b;
-}
-
-pub trait Assocs<'a>: AssocsSuper<'a> {
-    unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
-        where 'a: 'b + 'c;
 }
 
 #[repr(C)]
@@ -384,11 +399,12 @@ pub struct AssocListIter<'a, 'b, X, KV> {
 impl<'a, 'b, KV: 'b + Assoc<'a>, X: Matches<KV::Key>> UnsafeIterator
 for AssocListIter<'a, 'b, X, KV>
 {
-    type Item = &'a KV::Val;
+    type Item = (&'a KV::Key, &'a KV::Val);
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
         while let Some(key_val) = self.cur.next() {
-            if self.x.matches(&key_val.key()) { return Some(key_val.val()); }
+            let key = key_val.key();
+            if self.x.matches(key) { return Some((key, key_val.val())); }
         }
         None
     }
@@ -447,6 +463,10 @@ impl<'a, X> BlobVec<'a, X> {
     pub unsafe fn get(&self, ix: usize) -> &X {
         assert!(ix < self.len);
         &*get_behind_struct::<_, X>(self).add(ix)
+    }
+
+    pub unsafe fn as_ref(&self) -> &[X] {
+        std::slice::from_raw_parts(get_behind_struct::<_, X>(self), self.len)
     }
 
     pub unsafe fn deserialize<F: Fn(&mut X), After>
@@ -561,7 +581,11 @@ impl<'a, K, V> Vecmap<'a, K, V> {
     {
         let kcur = cur.behind::<VecmapVec<'a, K, V>>(0);
         let len = (*kcur.get_mut()).len;
-        let mut vcur = BlobVec::deserialize(kcur, |kv| { fk(&mut kv.key); });
+        let shifter = Shifter(cur.buf);
+        let mut vcur = BlobVec::deserialize(kcur, |kv| {
+            fk(&mut kv.key);
+            shifter.shift(&mut kv.val);
+        });
         for _ in 0..len { vcur = fv(vcur); }
         vcur.behind(0)
     }
@@ -574,12 +598,12 @@ pub struct VecmapIter<'a, 'b, X, K, V> {
 }
 
 impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for VecmapIter<'a, 'b, X, K, V> {
-    type Item = &'a V;
+    type Item = (&'a K, &'a V);
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
         while let Some(VecmapItem{ key, val }) = self.vec_iter.next() {
             if self.x.matches(key) {
-                return Some(&**val);
+                return Some((&key, &**val));
             }
         }
         None
@@ -639,6 +663,11 @@ impl<'a> U8State<'a> {
             states_iter: None,
             explicit_trans: self.explicit_trans,
         }
+    }
+
+    pub unsafe fn get_tags(&self) -> &[usize] {
+        if self.tags.is_null() { &[] }
+        else { (*self.tags).as_ref() }
     }
 
     pub unsafe fn deserialize<B>(state_cur: BuildCursor<U8State>) -> BuildCursor<B> {
@@ -702,6 +731,7 @@ impl<'a> U8State<'a> {
             |guard, guardref| { *guardref = *guard; },
             |qs, qs_cur| { U8States::serialize(qs, qs_cur, setq) }
         );
+        state.explicit_trans = exp_cur.cur as *const U8ExplicitTrans;
         let tags_cur: BuildCursor<u8> = U8ExplicitTrans::serialize(
             &origin.explicit_trans, exp_cur, |alist, alist_cur| {
                 U8AList::serialize(alist, alist_cur, |kv, kv_cur| {
@@ -727,7 +757,7 @@ pub struct U8StateIterator<'a, 'b> {
 }
 
 impl<'a, 'b> UnsafeIterator for U8StateIterator<'a, 'b> where 'a: 'b {
-    type Item = &'a U8State<'a>;
+    type Item = *const U8State<'a>;
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
         if let Some(states_iter) = self.states_iter.as_mut() {
@@ -736,21 +766,22 @@ impl<'a, 'b> UnsafeIterator for U8StateIterator<'a, 'b> where 'a: 'b {
             }
         }
         loop {
-            if let Some(states) = self.pattern_iter.next() {
+            if let Some((_, states)) = self.pattern_iter.next() {
                 let mut states_iter = states.iter();
                 if let Some(state) = states_iter.next() {
                     self.states_iter = Some(states_iter);
-                    return Some(&**state);
+                    return Some(*state);
                 }
             } else {
-                if !self.explicit_trans.is_null() {
+                if self.explicit_trans.is_null() { return None; }
+                else {
                     let explicit_trans = &*self.explicit_trans;
                     self.explicit_trans = std::ptr::null();
                     if let Some(states) = explicit_trans.get(self.pattern_iter.x) {
                         let mut states_iter = states.iter();
                         if let Some(state) = states_iter.next() {
                             self.states_iter = Some(states_iter);
-                            return Some(&**state);
+                            return Some(*state);
                         } else { return None; }
                     } else { return None; }
                 }
@@ -759,6 +790,7 @@ impl<'a, 'b> UnsafeIterator for U8StateIterator<'a, 'b> where 'a: 'b {
     }
 }
 
+#[derive(Debug)]
 pub struct U8StatePrepared {
     tags: Vec<usize>,
     pattern_trans: Vec<(Guard, Vec<usize>)>,
@@ -772,7 +804,7 @@ mod build {
 
     pub trait U8BuildConfig {
         fn guard_size_keep(&self) -> u32;
-        fn hashmap_cap_fn(&self, len: usize) -> usize;
+        fn hashmap_cap_power_fn(&self, len: usize) -> usize;
     }
 
     impl U8StatePrepared {
@@ -797,7 +829,7 @@ mod build {
                 if c == 255 { break; }
                 c += 1;
             }
-            let hashmap_cap_power = cfg.hashmap_cap_fn(explicit_trans0.len());
+            let hashmap_cap_power = cfg.hashmap_cap_power_fn(explicit_trans0.len());
             let hashmap_cap = 1 << hashmap_cap_power;
             let hashmap_mask = hashmap_cap - 1;
             let mut hashmap_alists = Vec::<Vec<(u8, Vec<usize>)>>::with_capacity(hashmap_cap);
@@ -812,5 +844,199 @@ mod build {
                 explicit_trans: hashmap_alists
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+pub mod tests {
+    use crate::char_enfa::OrderedIxs;
+
+    use super::*;
+    use super::build::*;
+
+    #[test]
+    pub fn test_blobvec() {
+        let origin = vec![1usize, 3, 5];
+        let mut sz = Reserve(0);
+        let my_addr = BlobVec::<usize>::reserve(&origin, &mut sz);
+        assert_eq!(my_addr, 0);
+        assert_eq!(sz.0, 4 * size_of::<usize>());
+        let mut buf = vec![0u8; sz.0];
+        let mut cur = BuildCursor::new(buf.as_mut_ptr());
+        cur = unsafe { BlobVec::<usize>::serialize(&origin, cur, |x, xcur| { *xcur = *x; }) };
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let mut cur = BuildCursor::new(buf.as_mut_ptr());
+        cur = unsafe { BlobVec::<usize>::deserialize(cur, |_| ()) };
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let blobvec = unsafe { &*(buf.as_ptr() as *const BlobVec<usize>) };
+        assert_eq!(blobvec.len, 3);
+        assert_eq!(unsafe { blobvec.get(0) }, &1);
+        assert_eq!(unsafe { blobvec.get(1) }, &3);
+        assert_eq!(unsafe { blobvec.get(2) }, &5);
+        let mut iter = unsafe { blobvec.iter() };
+        assert_eq!(unsafe { iter.next() }, Some(&1));
+        assert_eq!(unsafe { iter.next() }, Some(&3));
+        assert_eq!(unsafe { iter.next() }, Some(&5));
+        assert_eq!(unsafe { iter.next() }, None);
+        assert_eq!(unsafe{ blobvec.as_ref() }, &[1, 3, 5]);
+    }
+
+    #[test]
+    pub fn test_vecmap() {
+        let origin = vec![(1, b"foo".to_vec()), (3, b"hello".to_vec()), (5, b"".to_vec())];
+        let mut sz = Reserve(1);
+        let addr = Vecmap::<usize, BlobVec<u8>>::reserve(&origin, &mut sz, |x, sz| {
+            BlobVec::<u8>::reserve(x, sz);
+        });
+        assert_eq!(addr.0, if align_of::<usize>() == 1 { 0 } else { align_of::<usize>() });
+        let mut buf = vec![0u8; sz.0];
+        let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr.0) });
+        cur = unsafe { Vecmap::<usize, BlobVec<u8>>::serialize(&origin, cur,
+            |x, xcur| { *xcur = *x; },
+            |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }) }
+        )};
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr.0) });
+        cur = unsafe { Vecmap::<usize, BlobVec<u8>>::deserialize(cur,
+            |_| (),
+            |xcur| BlobVec::<u8>::deserialize(xcur, |_| ())
+        )};
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let vecmap = unsafe {
+            &*(buf.as_ptr().add(addr.0) as *const Vecmap::<usize, BlobVec<u8>>) };
+
+        let mut iter = unsafe { vecmap.iter_matches(&EqMatch(&3)) };
+        let (k, v) = unsafe { iter.next().unwrap() };
+        assert_eq!((k, unsafe { v.as_ref() }), (&3, b"hello".as_ref()));
+        assert_eq!(unsafe { iter.next() }.is_none(), true);
+
+        let mut iter = unsafe { vecmap.iter_matches(&AnyMatch) };
+        let (k, v) = unsafe { iter.next().unwrap() };
+        assert_eq!((k, unsafe { v.as_ref() }), (&1, b"foo".as_ref()));
+        let (k, v) = unsafe { iter.next().unwrap() };
+        assert_eq!((k, unsafe { v.as_ref() }), (&3, b"hello".as_ref()));
+        let (k, v) = unsafe { iter.next().unwrap() };
+        assert_eq!((k, unsafe { v.as_ref() }), (&5, b"".as_ref()));
+    }
+
+    #[test]
+    pub fn test_blobhashmap() {
+        let origin0 = vec![(1, b"foo".to_vec()), (3, b"hello".to_vec()), (5, b"".to_vec())];
+        let mut origin = vec![vec![], vec![], vec![], vec![]];
+        for (k, v) in origin0 {
+            origin[k as usize & 3].push((k, v));
+        }
+        let mut sz = Reserve(0);
+        let my_addr = BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>::reserve(
+            &origin, &mut sz,
+            |alist, sz| {
+                AssocList::<HomoKeyAssoc<u8, BlobVec<u8>>>::reserve(alist, sz, |kv, sz| {
+                    HomoKeyAssoc::<u8, BlobVec<u8>>::reserve(kv, sz, |v, sz| {
+                        BlobVec::<u8>::reserve(v, sz);
+                    });
+                });
+            }
+        );
+        assert_eq!(my_addr.0, 0);
+        let mut buf = vec![0u8; sz.0];
+        let mut cur = BuildCursor::new(buf.as_mut_ptr());
+        cur = unsafe { BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>::serialize(
+            &origin, cur,
+            |alist, alist_cur| {
+                AssocList::<HomoKeyAssoc<u8, BlobVec<u8>>>::serialize(alist, alist_cur,
+                    |kv, kv_cur| {
+                        HomoKeyAssoc::<u8, BlobVec<u8>>::serialize(kv, kv_cur,
+                            |k, k_cur| { *k_cur = *k; },
+                            |v, v_cur| {
+                                BlobVec::<u8>::serialize(v, v_cur, |x, x_cur| { *x_cur = *x; })
+                            }
+                        )
+                    }
+                )
+            }
+        )};
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let mut cur = BuildCursor::new(buf.as_mut_ptr());
+        cur = unsafe { BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>::deserialize(cur,
+            |alist_cur| AssocList::<HomoKeyAssoc<u8, BlobVec<u8>>>::deserialize(alist_cur,
+                |kv_cur| HomoKeyAssoc::<u8, BlobVec<u8>>::deserialize(kv_cur, |_| (), |v_cur|
+                    BlobVec::<u8>::deserialize(v_cur, |_| ())
+                )
+            )
+        )};
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let hash = unsafe { &*(buf.as_ptr() as
+            *const BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>) };
+        assert_eq!(unsafe { hash.get(&3).unwrap().as_ref() }, b"hello".as_ref());
+    }
+
+    struct TestU8BuildConfig;
+    impl U8BuildConfig for TestU8BuildConfig {
+        fn guard_size_keep(&self) -> u32 { 2 }
+        fn hashmap_cap_power_fn(&self, _len: usize) -> usize { 1 }
+    }
+
+    #[test]
+    fn test_states() {
+        let state0 = char_nfa::State {
+            tags: OrderedIxs(vec![]),
+            transitions: vec![
+                (Guard::from_range((b'a', b'a')), 0),
+                (Guard::from_range((b'a', b'a')), 1),
+                (Guard::from_range((b'c', b'z')), 1),
+            ],
+            is_deterministic: false,
+        };
+        let state1 = char_nfa::State {
+            tags: OrderedIxs(vec![1, 2]),
+            transitions: vec![(Guard::from_range((b'b', b'b')), 0)],
+            is_deterministic: false,
+        };
+        let states = vec![state0, state1];
+        let states = states.iter().map(|q|
+            U8StatePrepared::prepare(&q, &TestU8BuildConfig)).collect();
+        let mut sz = Reserve(0);
+        let (list_addr, addrs) = List::<U8State>::reserve(&states, &mut sz, |state, sz| {
+            U8State::reserve(state, sz)
+        });
+        assert_eq!(list_addr, 0);
+        let mut buf = vec![0u8; sz.0 + size_of::<usize>()];
+        let buf = align_up_ptr::<u128>(buf.as_mut_ptr());
+        let mut cur = BuildCursor::new(buf);
+        cur = unsafe { List::<U8State>::serialize(&states, cur, |state, state_cur| {
+            U8State::serialize(state, state_cur, &addrs)
+        })};
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let mut cur = BuildCursor::new(buf);
+        cur = unsafe {
+            List::<U8State>::deserialize(cur, |state_cur| U8State::deserialize(state_cur)) };
+        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        let list = unsafe { &*(buf as *const List<U8State>) };
+        let mut iter = list as *const List<U8State>;
+        let state0 = unsafe { iter.next() }.unwrap();
+        let state1 = unsafe { iter.next() }.unwrap();
+        assert!(unsafe { iter.next() }.is_none());
+
+        let mut iter = unsafe { state0.iter_matches(&b'b') };
+        assert!(unsafe { iter.next() }.is_none());
+
+        let mut iter = unsafe { state0.iter_matches(&b'a') };
+        let mut succs = vec![
+            unsafe { iter.next() }.unwrap(),
+            unsafe { iter.next() }.unwrap(),
+        ];
+        assert!(unsafe { iter.next() }.is_none());
+        succs.sort();
+        assert_eq!(succs, [state0 as *const U8State, state1]);
+
+        let mut iter = unsafe { state0.iter_matches(&b'p') };
+        let succs = vec![unsafe { iter.next() }.unwrap()];
+        assert!(unsafe { iter.next() }.is_none());
+        assert_eq!(succs, vec![state1 as *const U8State]);
+
+        let no_tags: &[usize] = &[];
+        assert_eq!(unsafe { state0.get_tags() }, no_tags);
+        assert_eq!(unsafe { state1.get_tags() }, &[1usize, 2]);
     }
 }
