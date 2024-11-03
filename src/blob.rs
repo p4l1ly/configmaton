@@ -517,39 +517,39 @@ impl<'a, X> UnsafeIterator for BlobVecIter<'a, X> {
 }
 
 #[repr(C)]
-pub struct VecmapItem<K, V> {
+pub struct VecMapItem<K, V> {
     key: K,
     val: *const V,
 }
 
-impl<K: Build, V: Build> Build for VecmapItem<K, V> {
+impl<K: Build, V: Build> Build for VecMapItem<K, V> {
     type Origin = (K::Origin, V::Origin);
 }
 
-type VecmapVec<'a, K, V> = BlobVec<'a, VecmapItem<K, V>>;
+type VecMapVec<'a, K, V> = BlobVec<'a, VecMapItem<K, V>>;
 
 #[repr(C)]
-pub struct Vecmap<'a, K, V> {
-    keys: VecmapVec<'a, K, V>,
+pub struct VecMap<'a, K, V> {
+    keys: VecMapVec<'a, K, V>,
     _phantom: PhantomData<&'a V>,
 }
 
-impl<'a, K: Build, V: Build> Build for Vecmap<'a, K, V> {
+impl<'a, K: Build, V: Build> Build for VecMap<'a, K, V> {
     type Origin = Vec<(K::Origin, V::Origin)>;
 }
 
-impl<'a, K: Build, V: Build> Vecmap<'a, K, V> {
+impl<'a, K: Build, V: Build> VecMap<'a, K, V> {
     pub fn reserve<RV, FV: Fn(&V::Origin, &mut Reserve) -> RV>
     (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, Vec<RV>)
     {
-        let my_addr = <VecmapVec<'a, K, V>>::reserve(origin, sz);
+        let my_addr = <VecMapVec<'a, K, V>>::reserve(origin, sz);
         let mut vaddrs = Vec::with_capacity(origin.len());
         for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
         (my_addr, vaddrs)
     }
 
     pub fn key_addr(my_addr: usize, ix: usize) -> usize {
-        <VecmapVec<'a, K, V>>::elem_addr(my_addr, ix)
+        <VecMapVec<'a, K, V>>::elem_addr(my_addr, ix)
     }
 
     pub unsafe fn serialize
@@ -561,10 +561,10 @@ impl<'a, K: Build, V: Build> Vecmap<'a, K, V> {
     (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut fk: FK, mut fv: FV)
     -> BuildCursor<After>
     {
-        let kcur = cur.behind::<VecmapVec<'a, K, V>>(0);
-        let item_cur = kcur.behind::<VecmapItem<K, V>>(1);
+        let kcur = cur.behind::<VecMapVec<'a, K, V>>(0);
+        let item_cur = kcur.behind::<VecMapItem<K, V>>(1);
         let mut vcur = item_cur.behind::<V>(origin.len());
-        <VecmapVec<'a, K, V>>::serialize::<_, V>(origin, kcur, |kv, bk| {
+        <VecMapVec<'a, K, V>>::serialize::<_, V>(origin, kcur, |kv, bk| {
             fk(&kv.0, &mut bk.key);
             bk.val = vcur.cur as *const V;
             vcur = fv(&kv.1, vcur.clone());
@@ -573,7 +573,7 @@ impl<'a, K: Build, V: Build> Vecmap<'a, K, V> {
     }
 }
 
-impl<'a, K, V> Vecmap<'a, K, V> {
+impl<'a, K, V> VecMap<'a, K, V> {
     pub unsafe fn deserialize<
         After,
         FK: Fn(&mut K),
@@ -581,7 +581,7 @@ impl<'a, K, V> Vecmap<'a, K, V> {
     >
     (cur: BuildCursor<Self>, fk: FK, fv: FV) -> BuildCursor<After>
     {
-        let kcur = cur.behind::<VecmapVec<'a, K, V>>(0);
+        let kcur = cur.behind::<VecMapVec<'a, K, V>>(0);
         let len = (*kcur.get_mut()).len;
         let shifter = Shifter(cur.buf);
         let mut vcur = BlobVec::deserialize(kcur, |kv| {
@@ -593,17 +593,17 @@ impl<'a, K, V> Vecmap<'a, K, V> {
     }
 }
 
-pub struct VecmapIter<'a, 'b, X, K, V> {
+pub struct VecMapIter<'a, 'b, X, K, V> {
     x: &'b X,
-    vec_iter: BlobVecIter<'a, VecmapItem<K, V>>,
+    vec_iter: BlobVecIter<'a, VecMapItem<K, V>>,
     _phantom: PhantomData<&'a K>,
 }
 
-impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for VecmapIter<'a, 'b, X, K, V> {
+impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for VecMapIter<'a, 'b, X, K, V> {
     type Item = (&'a K, &'a V);
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
-        while let Some(VecmapItem{ key, val }) = self.vec_iter.next() {
+        while let Some(VecMapItem{ key, val }) = self.vec_iter.next() {
             if self.x.matches(key) {
                 return Some((&key, &**val));
             }
@@ -612,17 +612,17 @@ impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for VecmapIter<'a, 'b, X, K
     }
 }
 
-impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for Vecmap<'a, K, V> {
+impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for VecMap<'a, K, V> {
     type Key = K;
     type Val = V;
-    type I<'b, X: 'b + Matches<K>> = VecmapIter<'a, 'b, X, K, V> where 'a: 'b;
+    type I<'b, X: 'b + Matches<K>> = VecMapIter<'a, 'b, X, K, V> where 'a: 'b;
 }
 
-impl<'a, K: 'a, V: 'a> Assocs<'a> for Vecmap<'a, K, V> {
+impl<'a, K: 'a, V: 'a> Assocs<'a> for VecMap<'a, K, V> {
     fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     {
-        VecmapIter {
+        VecMapIter {
             x: key,
             vec_iter: self.keys.iter(),
             _phantom: PhantomData,
@@ -635,7 +635,7 @@ type U8AItem<'a> = HomoKeyAssoc<'a, u8, U8States<'a>>;
 type U8AList<'a> = AssocList<'a, U8AItem<'a>>;
 type U8ExplicitTrans<'a> = BlobHashMap<'a, U8AList<'a>>;
 type U8Tags<'a> = BlobVec<'a, usize>;
-type U8PatternTrans<'a> = Vecmap<'a, Guard, U8States<'a>>;
+type U8PatternTrans<'a> = VecMap<'a, Guard, U8States<'a>>;
 
 impl Build for *const U8State<'_> {
     type Origin = usize;
@@ -757,7 +757,7 @@ impl<'a> U8State<'a> {
 }
 
 pub struct U8StateIterator<'a, 'b> {
-    pattern_iter: VecmapIter<'a, 'b, u8, Guard, U8States<'a>>,
+    pattern_iter: VecMapIter<'a, 'b, u8, Guard, U8States<'a>>,
     states_iter: Option<BlobVecIter<'a, *const U8State<'a>>>,
     explicit_trans: *const U8ExplicitTrans<'a>,
 }
@@ -892,25 +892,25 @@ pub mod tests {
     pub fn test_vecmap() {
         let origin = vec![(1, b"foo".to_vec()), (3, b"hello".to_vec()), (5, b"".to_vec())];
         let mut sz = Reserve(1);
-        let addr = Vecmap::<usize, BlobVec<u8>>::reserve(&origin, &mut sz, |x, sz| {
+        let addr = VecMap::<usize, BlobVec<u8>>::reserve(&origin, &mut sz, |x, sz| {
             BlobVec::<u8>::reserve(x, sz);
         });
         assert_eq!(addr.0, if align_of::<usize>() == 1 { 0 } else { align_of::<usize>() });
         let mut buf = vec![0u8; sz.0];
         let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr.0) });
-        cur = unsafe { Vecmap::<usize, BlobVec<u8>>::serialize(&origin, cur,
+        cur = unsafe { VecMap::<usize, BlobVec<u8>>::serialize(&origin, cur,
             |x, xcur| { *xcur = *x; },
             |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }) }
         )};
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr.0) });
-        cur = unsafe { Vecmap::<usize, BlobVec<u8>>::deserialize(cur,
+        cur = unsafe { VecMap::<usize, BlobVec<u8>>::deserialize(cur,
             |_| (),
             |xcur| BlobVec::<u8>::deserialize(xcur, |_| ())
         )};
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let vecmap = unsafe {
-            &*(buf.as_ptr().add(addr.0) as *const Vecmap::<usize, BlobVec<u8>>) };
+            &*(buf.as_ptr().add(addr.0) as *const VecMap::<usize, BlobVec<u8>>) };
 
         let mut iter = vecmap.iter_matches(&EqMatch(&3));
         let (k, v) = unsafe { iter.next().unwrap() };
@@ -989,22 +989,22 @@ pub mod tests {
         let states = qs.iter().map(|q|
             ((), U8StatePrepared::prepare(&q, &TestU8BuildConfig))).collect();
         let mut sz = Reserve(0);
-        let (list_addr, addrs) = Vecmap::<(), U8State>::reserve(&states, &mut sz, |state, sz| {
+        let (list_addr, addrs) = VecMap::<(), U8State>::reserve(&states, &mut sz, |state, sz| {
             U8State::reserve(state, sz)
         });
         assert_eq!(list_addr, 0);
         buf.resize(sz.0 + size_of::<usize>(), 0);
         let buf = align_up_ptr::<u128>(buf.as_mut_ptr());
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe { Vecmap::<(), U8State>::serialize(&states, cur, |_, _| (),
+        cur = unsafe { VecMap::<(), U8State>::serialize(&states, cur, |_, _| (),
             |state, state_cur| { U8State::serialize(state, state_cur, &addrs) }
         )};
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe { Vecmap::<(), U8State>::deserialize(cur, |_| (),
+        cur = unsafe { VecMap::<(), U8State>::deserialize(cur, |_| (),
             |state_cur| U8State::deserialize(state_cur)) };
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
-        let vecmap = unsafe { &*(buf as *const Vecmap<(), U8State>) };
+        let vecmap = unsafe { &*(buf as *const VecMap<(), U8State>) };
         let mut iter = vecmap.iter_matches(&AnyMatch);
         let result = (0..qs.len()).map(|_| iter.next().unwrap().1).collect::<Vec<_>>();
         assert!(unsafe { iter.next() }.is_none());
