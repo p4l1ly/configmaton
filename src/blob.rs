@@ -744,8 +744,7 @@ impl<'a, K: 'a, V: 'a> Assocs<'a> for ListMap<'a, K, V> {
 }
 
 type U8States<'a> = BlobVec<'a, *const U8State<'a>>;
-type U8AItem<'a> = HomoKeyAssoc<'a, u8, U8States<'a>>;
-type U8AList<'a> = AssocList<'a, U8AItem<'a>>;
+type U8AList<'a> = VecMap<'a, u8, U8States<'a>>;
 type U8ExplicitTrans<'a> = BlobHashMap<'a, U8AList<'a>>;
 type U8Tags<'a> = BlobVec<'a, usize>;
 type U8PatternTrans<'a> = VecMap<'a, Guard, U8States<'a>>;
@@ -764,6 +763,7 @@ impl Build for () {
 
 #[repr(C)]
 pub struct U8State<'a> {
+    is_dense: bool,
     tags: *const U8Tags<'a>,
     explicit_trans: *const U8ExplicitTrans<'a>,
     pattern_trans: U8PatternTrans<'a>,
@@ -797,15 +797,14 @@ impl<'a> U8State<'a> {
         let state = &mut *state_cur.get_mut();
         shifter.shift(&mut state.explicit_trans);
 
-        let f_tags_cur = state_cur.behind::<*const U8Tags>(0);
+        let f_is_dense_cur = state_cur.behind::<bool>(0);
+        let f_tags_cur = f_is_dense_cur.behind::<*const U8Tags>(1);
         let f_explicit_trans_cur = f_tags_cur.behind::<*const U8ExplicitTrans>(1);
         let f_pattern_trans_cur = f_explicit_trans_cur.behind::<U8PatternTrans>(1);
         let exp_cur = U8PatternTrans::deserialize(f_pattern_trans_cur, |_| (), shiftqs1);
 
         let tags_cur: BuildCursor<u8> = U8ExplicitTrans::deserialize(exp_cur, |alist_cur|
-            U8AList::deserialize(alist_cur, |kv_cur|
-                U8AItem::deserialize(kv_cur, |_| (), shiftqs2)
-            )
+            U8AList::deserialize(alist_cur, |_| (), shiftqs2)
         );
 
         if state.tags.is_null() { tags_cur.behind(0) }
@@ -822,13 +821,12 @@ impl<'a> U8State<'a> {
     pub fn reserve(origin: &<Self as Build>::Origin, sz: &mut Reserve) -> usize {
         sz.add::<U8State>(0);
         let result = sz.0;
+        sz.add::<bool>(1);
         sz.add::<*const U8Tags>(1);
         sz.add::<*const U8ExplicitTrans>(1);
         U8PatternTrans::reserve(&origin.pattern_trans, sz, Self::resqs);
         U8ExplicitTrans::reserve(&origin.explicit_trans, sz, |alist, sz| {
-            U8AList::reserve(alist, sz, |kv, sz| {
-                U8AItem::reserve(kv, sz, Self::resqs);
-            });
+            U8AList::reserve(alist, sz, Self::resqs);
         });
         if !origin.tags.is_empty() {
             U8Tags::reserve(&origin.tags, sz);
@@ -841,8 +839,10 @@ impl<'a> U8State<'a> {
     -> BuildCursor<After>
     {
         let state = &mut *cur.get_mut();
+        state.is_dense = true;
         let setq = |q: &usize, qref: &mut *const U8State| { *qref = qptrs[*q] as *const U8State; };
-        let f_tags_cur = cur.behind::<*const U8Tags>(0);
+        let f_is_dense_cur = cur.behind::<bool>(0);
+        let f_tags_cur = f_is_dense_cur.behind::<*const U8Tags>(1);
         let f_explicit_trans_cur = f_tags_cur.behind::<*const U8ExplicitTrans>(1);
         let f_pattern_trans_cur = f_explicit_trans_cur.behind::<U8PatternTrans>(1);
         let exp_cur = U8PatternTrans::serialize(
@@ -853,11 +853,10 @@ impl<'a> U8State<'a> {
         state.explicit_trans = exp_cur.cur as *const U8ExplicitTrans;
         let tags_cur: BuildCursor<u8> = U8ExplicitTrans::serialize(
             &origin.explicit_trans, exp_cur, |alist, alist_cur| {
-                U8AList::serialize(alist, alist_cur, |kv, kv_cur| {
-                    U8AItem::serialize(kv, kv_cur, |c, c_cur| { *c_cur = *c; },
-                        |qs, qs_cur| { U8States::serialize(qs, qs_cur, setq) }
-                    )
-                })
+                U8AList::serialize(alist, alist_cur,
+                    |c, c_cur| { *c_cur = *c; },
+                    |qs, qs_cur| { U8States::serialize(qs, qs_cur, setq) },
+                )
             }
         );
         if origin.tags.is_empty() { tags_cur.behind(0) }
