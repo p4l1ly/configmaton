@@ -1,6 +1,6 @@
 use indexmap::IndexSet;
 
-use crate::blob::{U8State, UnsafeIterator};
+use crate::blob::{U8State, U8StateIterator, UnsafeIterator};
 
 pub struct Runner<'a> {
     // Mapping from symbols to such current states from which a transition via the symbol exists.
@@ -21,9 +21,17 @@ impl<'a> Runner<'a>
         // Finally, let's handle the self-handling states.
         for state in states.into_iter() {
             let state = &*state;
-            let mut iter = state.iter_matches(&symbol);
-            while let Some(right) = iter.next() {
-                self.states.insert(right);
+            match state.iter_matches(&symbol) {
+                U8StateIterator::Sparse(mut iter) => {
+                    while let Some(right) = iter.next() {
+                        self.states.insert(right);
+                    }
+                },
+                U8StateIterator::Dense(mut iter) => {
+                    while let Some(right) = iter.next() {
+                        self.states.insert(*right);
+                    }
+                },
             }
         }
     }
