@@ -130,7 +130,7 @@ pub trait AssocsSuper<'a> {
 }
 
 pub trait Assocs<'a>: AssocsSuper<'a> {
-    fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c;
 }
 
@@ -425,7 +425,7 @@ impl<'a, KV: Assoc<'a>> AssocsSuper<'a> for AssocList<'a, KV> {
 }
 
 impl<'a, KV: Assoc<'a>> Assocs<'a> for AssocList<'a, KV> {
-    fn iter_matches<'c, 'b, X: Matches<KV::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    unsafe fn iter_matches<'c, 'b, X: Matches<KV::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     { AssocListIter { x: key, cur: &self.0 } }
 }
@@ -442,14 +442,14 @@ impl Build for Guard {
     type Origin = Guard;
 }
 
-impl<'a, X: Build> Build for BlobVec<'a, X> {
-    type Origin = Vec<X::Origin>;
-}
-
 #[repr(C)]
 pub struct BlobVec<'a, X> {
     len: usize,
     _phantom: PhantomData<&'a X>,
+}
+
+impl<'a, X: Build> Build for BlobVec<'a, X> {
+    type Origin = Vec<X::Origin>;
 }
 
 pub struct BlobVecIter<'a, X> {
@@ -459,13 +459,9 @@ pub struct BlobVecIter<'a, X> {
 }
 
 impl<'a, X> BlobVec<'a, X> {
-    pub fn iter(&self) -> BlobVecIter<'a, X> {
-        let cur = unsafe { get_behind_struct::<_, X>(self) };
-        BlobVecIter {
-            cur,
-            end: unsafe { cur.add(self.len) },
-            _phantom: PhantomData,
-        }
+    pub unsafe fn iter(&self) -> BlobVecIter<'a, X> {
+        let cur = get_behind_struct::<_, X>(self);
+        BlobVecIter { cur, end: cur.add(self.len), _phantom: PhantomData }
     }
 
     pub unsafe fn get(&self, ix: usize) -> &X {
@@ -523,6 +519,72 @@ impl<'a, X> UnsafeIterator for BlobVecIter<'a, X> {
 }
 
 #[repr(C)]
+pub struct Sediment<'a, X> {
+    len: usize,
+    _phantom: PhantomData<&'a X>,
+}
+
+impl<'a, X: Build> Build for Sediment<'a, X> {
+    type Origin = Vec<X::Origin>;
+}
+
+pub struct SedimentIter<'a, F, X> {
+    len: usize,
+    f: F,
+    cur: *const X,
+    _phantom: PhantomData<&'a X>,
+}
+
+impl<'a, X> Sediment<'a, X> {
+    pub unsafe fn iter<F: FnMut(&X) -> *const X>(&self, f: F) -> SedimentIter<'a, F, X> {
+        let cur = get_behind_struct::<_, X>(self);
+        SedimentIter { len: self.len, f, cur, _phantom: PhantomData }
+    }
+
+    pub unsafe fn deserialize<F: FnMut(BuildCursor<X>) -> BuildCursor<X>, After>
+    (cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
+    {
+        let mut xcur = cur.behind(1);
+        for _ in 0..(*cur.get_mut()).len { xcur = f(xcur); }
+        xcur.behind(0)
+    }
+}
+
+impl<'a, X: Build> Sediment<'a, X> {
+    pub fn reserve<R, F: Fn(&X::Origin, &mut Reserve) -> R>
+        (origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> (usize, Vec<R>)
+    {
+        sz.add::<Self>(0);
+        let my_addr = sz.0;
+        sz.add::<Self>(1);
+        let mut xaddrs = Vec::with_capacity(origin.len());
+        for x in origin.iter() { xaddrs.push(f(x, sz)); }
+        sz.add::<X>(0);
+        (my_addr, xaddrs)
+    }
+
+    pub unsafe fn serialize<F: FnMut(&X::Origin, BuildCursor<X>) -> BuildCursor<X>, After>
+    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
+    {
+        (*cur.get_mut()).len = origin.len();
+        let mut xcur = cur.behind(1);
+        for x in origin.iter() { xcur = f(x, xcur); }
+        xcur.behind(0)
+    }
+}
+
+impl<'a, X, F: FnMut(&X) -> *const X> UnsafeIterator for SedimentIter<'a, F, X> {
+    type Item = ();
+
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        if self.len == 0 { return None; }
+        self.len -= 1;
+        self.cur = (self.f)(&*self.cur);
+        Some(())
+    }
+}
+
+#[repr(C)]
 pub struct VecMapItem<K, V> {
     key: K,
     val: *const V,
@@ -548,9 +610,9 @@ impl<'a, K: Build, V: Build> VecMap<'a, K, V> {
     (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, Vec<RV>)
     {
         let my_addr = <VecMapVec<'a, K, V>>::reserve(origin, sz);
-        sz.add::<V>(0);
         let mut vaddrs = Vec::with_capacity(origin.len());
         for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
+        sz.add::<V>(0);
         (my_addr, vaddrs)
     }
 
@@ -625,7 +687,7 @@ impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for VecMap<'a, K, V> {
 }
 
 impl<'a, K: 'a, V: 'a> Assocs<'a> for VecMap<'a, K, V> {
-    fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    unsafe fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     { VecMapIter { x: key, vec_iter: self.keys.iter(), _phantom: PhantomData } }
 }
@@ -661,9 +723,9 @@ impl<'a, K: Build, V: Build> ListMap<'a, K, V> {
     {
         let (my_addr, kaddrs) = <ListMapList<'a, K, V>>::reserve(origin, sz,
             |(k, _), sz| { sz.add::<ListMapItem<K, V>>(1); fk(k, sz) });
-        sz.add::<V>(0);
         let mut vaddrs = Vec::with_capacity(origin.len());
         for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
+        sz.add::<V>(0);
         (my_addr, kaddrs, vaddrs)
     }
 
@@ -738,7 +800,7 @@ impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for ListMap<'a, K, V> {
 }
 
 impl<'a, K: 'a, V: 'a> Assocs<'a> for ListMap<'a, K, V> {
-    fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    unsafe fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
         where 'a: 'b + 'c
     { ListMapIter { x: key, list_iter: &self.keys, _phantom: PhantomData } }
 }
@@ -1154,7 +1216,7 @@ pub mod tests {
         assert_eq!(unsafe { blobvec.get(0) }, &1);
         assert_eq!(unsafe { blobvec.get(1) }, &3);
         assert_eq!(unsafe { blobvec.get(2) }, &5);
-        let mut iter = blobvec.iter();
+        let mut iter = unsafe { blobvec.iter() };
         assert_eq!(unsafe { iter.next() }, Some(&1));
         assert_eq!(unsafe { iter.next() }, Some(&3));
         assert_eq!(unsafe { iter.next() }, Some(&5));
@@ -1186,12 +1248,12 @@ pub mod tests {
         let vecmap = unsafe {
             &*(buf.as_ptr().add(addr.0) as *const VecMap::<usize, BlobVec<u8>>) };
 
-        let mut iter = vecmap.iter_matches(&EqMatch(&3));
+        let mut iter = unsafe { vecmap.iter_matches(&EqMatch(&3)) };
         let (k, v) = unsafe { iter.next().unwrap() };
         assert_eq!((k, unsafe { v.as_ref() }), (&3, b"hello".as_ref()));
         assert_eq!(unsafe { iter.next() }.is_none(), true);
 
-        let mut iter = vecmap.iter_matches(&AnyMatch);
+        let mut iter = unsafe { vecmap.iter_matches(&AnyMatch) };
         let (k, v) = unsafe { iter.next().unwrap() };
         assert_eq!((k, unsafe { v.as_ref() }), (&1, b"foo".as_ref()));
         let (k, v) = unsafe { iter.next().unwrap() };
@@ -1230,7 +1292,7 @@ pub mod tests {
             &*(buf.as_ptr().add(addr.0) as *const ListMap::<BlobVec<u8>, BlobVec<u8>>) };
 
         let key = b"aa".as_ref();
-        let mut iter = vecmap.iter_matches(&key);
+        let mut iter = unsafe { vecmap.iter_matches(&key) };
         let (k, v) = unsafe { iter.next().unwrap() };
         assert_eq!(unsafe { (k.as_ref(), v.as_ref()) }, (b"aa".as_ref(), b"foo".as_ref()));
         let (k, v) = unsafe { iter.next().unwrap() };
@@ -1300,28 +1362,23 @@ pub mod tests {
         -> Vec<&'a U8State<'a>>
     {
         let states = qs.iter().map(|q|
-            ((), U8StatePrepared::prepare(&q, &TestU8BuildConfig))).collect();
+            U8StatePrepared::prepare(&q, &TestU8BuildConfig)).collect();
         let mut sz = Reserve(0);
-        let (list_addr, addrs) = VecMap::<(), U8State>::reserve(&states, &mut sz, |state, sz| {
+        let (list_addr, addrs) = Sediment::<U8State>::reserve(&states, &mut sz, |state, sz| {
             U8State::reserve(state, sz)
         });
         assert_eq!(list_addr, 0);
         buf.resize(sz.0 + size_of::<usize>(), 0);
         let buf = align_up_ptr::<u128>(buf.as_mut_ptr());
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe { VecMap::<(), U8State>::serialize(&states, cur, |_, _| (),
-            |state, state_cur| { U8State::serialize(state, state_cur, &addrs) }
-        )};
+        cur = unsafe { Sediment::<U8State>::serialize(&states, cur,
+            |state, state_cur| { U8State::serialize(state, state_cur, &addrs) })};
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe { VecMap::<(), U8State>::deserialize(cur, |_| (),
+        cur = unsafe { Sediment::<U8State>::deserialize(cur,
             |state_cur| U8State::deserialize(state_cur)) };
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
-        let vecmap = unsafe { &*(buf as *const VecMap<(), U8State>) };
-        let mut iter = vecmap.iter_matches(&AnyMatch);
-        let result = (0..qs.len()).map(|_| iter.next().unwrap().1).collect::<Vec<_>>();
-        assert!(unsafe { iter.next() }.is_none());
-        result
+        (0..qs.len()).map(|i| &*(buf.add(addrs[i]) as *const U8State)).collect()
     }
 
     pub fn expect_dense<'a, 'b>(iter: U8StateIterator<'a, 'b>) -> U8DenseStateIterator<'a> {
