@@ -11,7 +11,7 @@ use vec::BlobVec;
 pub mod hashmap;
 pub mod list;
 pub mod assoc_list;
-pub mod homo_key_assoc;
+pub mod flagellum;
 pub mod vec;
 pub mod sediment;
 pub mod vecmap;
@@ -205,7 +205,7 @@ pub mod tests {
 
     use super::*;
     use super::{
-        hashmap::*, assoc_list::*, state::{*, build::*}, vecmap::*, listmap::*, homo_key_assoc::*,
+        hashmap::*, assoc_list::*, state::{*, build::*}, vecmap::*, listmap::*, flagellum::*,
         sediment::*,
     };
     use crate::char_nfa;
@@ -321,11 +321,11 @@ pub mod tests {
             origin[k as usize & 3].push((k, v));
         }
         let mut sz = Reserve(0);
-        let my_addr = BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>::reserve(
+        let my_addr = BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::reserve(
             &origin, &mut sz,
             |alist, sz| {
-                AssocList::<HomoKeyAssoc<u8, BlobVec<u8>>>::reserve(alist, sz, |kv, sz| {
-                    HomoKeyAssoc::<u8, BlobVec<u8>>::reserve(kv, sz, |v, sz| {
+                AssocList::<Flagellum<u8, BlobVec<u8>>>::reserve(alist, sz, |kv, sz| {
+                    Flagellum::<u8, BlobVec<u8>>::reserve(kv, sz, |v, sz| {
                         BlobVec::<u8>::reserve(v, sz);
                     });
                 });
@@ -334,12 +334,12 @@ pub mod tests {
         assert_eq!(my_addr.0, 0);
         let mut buf = vec![0u8; sz.0];
         let mut cur = BuildCursor::new(buf.as_mut_ptr());
-        cur = unsafe { BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>::serialize(
+        cur = unsafe { BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::serialize(
             &origin, cur,
             |alist, alist_cur| {
-                AssocList::<HomoKeyAssoc<u8, BlobVec<u8>>>::serialize(alist, alist_cur,
+                AssocList::<Flagellum<u8, BlobVec<u8>>>::serialize(alist, alist_cur,
                     |kv, kv_cur| {
-                        HomoKeyAssoc::<u8, BlobVec<u8>>::serialize(kv, kv_cur,
+                        Flagellum::<u8, BlobVec<u8>>::serialize(kv, kv_cur,
                             |k, k_cur| { *k_cur = *k; },
                             |v, v_cur| {
                                 BlobVec::<u8>::serialize(v, v_cur, |x, x_cur| { *x_cur = *x; })
@@ -351,16 +351,16 @@ pub mod tests {
         )};
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let mut cur = BuildCursor::new(buf.as_mut_ptr());
-        cur = unsafe { BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>::deserialize(cur,
-            |alist_cur| AssocList::<HomoKeyAssoc<u8, BlobVec<u8>>>::deserialize(alist_cur,
-                |kv_cur| HomoKeyAssoc::<u8, BlobVec<u8>>::deserialize(kv_cur, |_| (), |v_cur|
+        cur = unsafe { BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::deserialize(cur,
+            |alist_cur| AssocList::<Flagellum<u8, BlobVec<u8>>>::deserialize(alist_cur,
+                |kv_cur| Flagellum::<u8, BlobVec<u8>>::deserialize(kv_cur, |_| (), |v_cur|
                     BlobVec::<u8>::deserialize(v_cur, |_| ())
                 )
             )
         )};
         assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
         let hash = unsafe { &*(buf.as_ptr() as
-            *const BlobHashMap::<AssocList<HomoKeyAssoc<u8, BlobVec<u8>>>>) };
+            *const BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>) };
         assert_eq!(unsafe { hash.get(&3).unwrap().as_ref() }, b"hello".as_ref());
     }
 

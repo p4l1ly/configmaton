@@ -3,13 +3,13 @@ use std::marker::PhantomData;
 use super::{Assoc, Build, BuildCursor, Reserve};
 
 #[repr(C)]
-pub struct HomoKeyAssoc<'a, K, V> {
+pub struct Flagellum<'a, K, V> {
     key: K,
     val: V,
     _phantom: PhantomData<&'a ()>
 }
 
-impl<'a, K, V> HomoKeyAssoc<'a, K, V> {
+impl<'a, K, V> Flagellum<'a, K, V> {
     pub unsafe fn deserialize
     <
         After,
@@ -23,11 +23,11 @@ impl<'a, K, V> HomoKeyAssoc<'a, K, V> {
     }
 }
 
-impl<'a, K: Build, V: Build> Build for HomoKeyAssoc<'a, K, V> {
+impl<'a, K: Build, V: Build> Build for Flagellum<'a, K, V> {
     type Origin = (K::Origin, V::Origin);
 }
 
-impl<'a, K: Build, V: Build> HomoKeyAssoc<'a, K, V> {
+impl<'a, K: Build, V: Build> Flagellum<'a, K, V> {
     pub fn reserve<RV, FV: Fn(&V::Origin, &mut Reserve) -> RV>
     (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, RV)
     {
@@ -52,7 +52,7 @@ impl<'a, K: Build, V: Build> HomoKeyAssoc<'a, K, V> {
     }
 }
 
-impl<'a, K: 'a, V: 'a> Assoc<'a> for HomoKeyAssoc<'a, K, V> {
+impl<'a, K: 'a, V: 'a> Assoc<'a> for Flagellum<'a, K, V> {
     type Key = K;
     type Val = V;
 
