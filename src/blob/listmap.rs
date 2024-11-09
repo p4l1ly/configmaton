@@ -61,7 +61,7 @@ impl<'a, K: Build, V: Build> ListMap<'a, K, V> {
             (*item_cur.get_mut()).val = vcur.cur as *const V;
             vcur = fv(&kv.1, vcur);
         }
-        vcur.behind(0)
+        vcur.align()
     }
 }
 
@@ -82,7 +82,7 @@ impl<'a, K, V> ListMap<'a, K, V> {
             fk(item_cur.behind(1))
         });
         for _ in 0..len { vcur = fv(vcur); }
-        vcur.behind(0)
+        vcur.align()
     }
 }
 

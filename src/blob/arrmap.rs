@@ -39,7 +39,7 @@ impl<'a, const SIZE: usize, V: Build> ArrMap<'a, SIZE, V> {
             vcur = fv(v, vcur.clone());
             i += 1;
         });
-        let r = vcur.behind(0);
+        let r = vcur.align();
         r
     }
 }
@@ -59,6 +59,6 @@ impl<'a, const SIZE: usize, V> ArrMap<'a, SIZE, V> {
         (*cur.get_mut()).arr.each_mut().map(|v| shifter.shift(v));
         let mut vcur = cur.behind(1);
         for _ in 0..SIZE { vcur = fv(vcur); }
-        vcur.behind(0)
+        vcur.align()
     }
 }

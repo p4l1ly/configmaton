@@ -38,7 +38,7 @@ impl<'a, X> BlobVec<'a, X> {
     {
         let mut xcur = cur.behind(1);
         for _ in 0..(*cur.get_mut()).len { f(&mut *xcur.get_mut()); xcur.inc(); }
-        xcur.behind(0)
+        xcur.align()
     }
 }
 
@@ -61,7 +61,7 @@ impl<'a, X: Build> BlobVec<'a, X> {
         (*cur.get_mut()).len = origin.len();
         let mut xcur = cur.behind(1);
         for x in origin.iter() { f(x, &mut *xcur.get_mut()); xcur.inc(); }
-        xcur.behind(0)
+        xcur.align()
     }
 }
 

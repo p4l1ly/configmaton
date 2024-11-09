@@ -114,6 +114,22 @@ impl<A> BuildCursor<A> {
         }
     }
 
+    pub fn align<B>(&self) -> BuildCursor<B> {
+        BuildCursor {
+            cur: align_up(self.cur, align_of::<B>()),
+            buf: self.buf,
+            _phantom: PhantomData
+        }
+    }
+
+    pub fn transmute<B>(&self) -> BuildCursor<B> {
+        BuildCursor {
+            cur: self.cur,
+            buf: self.buf,
+            _phantom: PhantomData
+        }
+    }
+
     pub unsafe fn get_mut(&self) -> *mut A {
         self.buf.add(self.cur) as *mut A
     }

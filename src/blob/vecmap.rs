@@ -55,7 +55,7 @@ impl<'a, K: Build, V: Build> VecMap<'a, K, V> {
             bk.val = vcur.cur as *const V;
             vcur = fv(&kv.1, vcur.clone());
         });
-        vcur.behind(0)
+        vcur.align()
     }
 }
 
@@ -75,7 +75,7 @@ impl<'a, K, V> VecMap<'a, K, V> {
             shifter.shift(&mut kv.val);
         });
         for _ in 0..len { vcur = fv(vcur); }
-        vcur.behind(0)
+        vcur.align()
     }
 }
 

@@ -30,7 +30,7 @@ impl<'a, X> Sediment<'a, X> {
     {
         let mut xcur = cur.behind(1);
         for _ in 0..(*cur.get_mut()).len { xcur = f(xcur); }
-        xcur.behind(0)
+        xcur.align()
     }
 }
 
@@ -53,7 +53,7 @@ impl<'a, X: Build> Sediment<'a, X> {
         (*cur.get_mut()).len = origin.len();
         let mut xcur = cur.behind(1);
         for x in origin.iter() { xcur = f(x, xcur); }
-        xcur.behind(0)
+        xcur.align()
     }
 }
 

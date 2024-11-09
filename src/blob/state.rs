@@ -69,7 +69,7 @@ impl<'a> U8State<'a> {
     pub unsafe fn deserialize<B>(state_cur: BuildCursor<U8State>) -> BuildCursor<B> {
         let shifter = Shifter(state_cur.buf);
         let state = &mut *state_cur.get_mut();
-        let f_is_dense_cur = state_cur.behind::<bool>(0);
+        let f_is_dense_cur = state_cur.transmute::<bool>();
         let f_tags_cur = f_is_dense_cur.behind::<*const U8Tags>(1);
         let shiftq = |q: &mut *const U8State| shifter.shift(q);
 
@@ -79,10 +79,10 @@ impl<'a> U8State<'a> {
             let tags_cur: BuildCursor<u8> = U8ArrMap::deserialize(f_trans_cur,
                 |qs_cur| U8States::deserialize(qs_cur, shiftq));
 
-            if dense.tags.is_null() { tags_cur.behind(0) }
+            if dense.tags.is_null() { tags_cur.align() }
             else {
                 shifter.shift(&mut dense.tags);
-                U8Tags::deserialize(tags_cur.behind(0), |_| ())
+                U8Tags::deserialize(tags_cur.align(), |_| ())
             }
         } else {
             let sparse = &mut state.sparse;
@@ -98,10 +98,10 @@ impl<'a> U8State<'a> {
                     |qs_cur| U8States::deserialize(qs_cur, shiftq))
             );
 
-            if sparse.tags.is_null() { tags_cur.behind(0) }
+            if sparse.tags.is_null() { tags_cur.align() }
             else {
                 shifter.shift(&mut sparse.tags);
-                U8Tags::deserialize(tags_cur.behind(0), |_| ())
+                U8Tags::deserialize(tags_cur.align(), |_| ())
             }
         }
     }
@@ -135,7 +135,7 @@ impl<'a> U8State<'a> {
     -> BuildCursor<After>
     {
         let state = &mut *cur.get_mut();
-        let f_is_dense_cur = cur.behind::<bool>(0);
+        let f_is_dense_cur = cur.transmute::<bool>();
         let f_tags_cur = f_is_dense_cur.behind::<*const U8Tags>(1);
         let setq = |q: &usize, qref: &mut *const U8State| { *qref = qptrs[*q] as *const U8State; };
 
@@ -161,10 +161,10 @@ impl<'a> U8State<'a> {
                 );
                 if sparse_origin.tags.is_empty() {
                     sparse.tags = std::ptr::null();
-                    tags_cur.behind(0)
+                    tags_cur.align()
                 }
                 else {
-                    let tags_cur = tags_cur.behind(0);
+                    let tags_cur = tags_cur.align();
                     sparse.tags = tags_cur.cur as *const U8Tags;
                     U8Tags::serialize(&sparse_origin.tags, tags_cur, |t, tref| { *tref = *t; })
                 }
@@ -178,9 +178,9 @@ impl<'a> U8State<'a> {
                     |qs, qs_cur| U8States::serialize(qs, qs_cur, setq));
                 if dense_origin.tags.is_empty() {
                     dense.tags = std::ptr::null();
-                    tags_cur.behind(0)
+                    tags_cur.align()
                 } else {
-                    let tags_cur = tags_cur.behind(0);
+                    let tags_cur = tags_cur.align();
                     dense.tags = tags_cur.cur as *const U8Tags;
                     U8Tags::serialize(&dense_origin.tags, tags_cur, |t, tref| { *tref = *t; })
                 }

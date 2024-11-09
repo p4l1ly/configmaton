@@ -43,7 +43,7 @@ impl<'a, AList> BlobHashMap<'a, AList> {
             }
             arr_cur.inc();
         }
-        alist_cur.behind(0)
+        alist_cur.align()
     }
 }
 
@@ -86,6 +86,6 @@ impl<'a, AList: Build> BlobHashMap<'a, AList> where AList::Origin: IsEmpty {
             }
             arr_cur.inc()
         }
-        alist_cur.behind(0)
+        alist_cur.align()
     }
 }

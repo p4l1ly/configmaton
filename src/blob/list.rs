@@ -30,7 +30,7 @@ impl<'a, X> List<'a, X> {
         loop {
             let alist = &mut *cur.get_mut();
             cur = f(cur.behind(1));
-            if alist.next.is_null() { return cur.behind(0); }
+            if alist.next.is_null() { return cur.align(); }
             Shifter(cur.buf).shift(&mut alist.next);
         }
     }
@@ -69,6 +69,6 @@ impl<'a, X: Build> List<'a, X> {
                 *next = cur.cur as *const Self;
             }
         }
-        cur.behind(0)
+        cur.align()
     }
 }

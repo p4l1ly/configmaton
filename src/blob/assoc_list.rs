@@ -12,7 +12,7 @@ impl<'a, KV> AssocList<'a, KV> {
         After,
     >
     (cur: BuildCursor<Self>, f: F) -> BuildCursor<After> {
-        <List<'a, KV>>::deserialize(cur.behind(0), f)
+        <List<'a, KV>>::deserialize(cur.transmute(), f)
     }
 }
 
@@ -32,7 +32,7 @@ impl<'a, KV: Build> AssocList<'a, KV> {
     >
     (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, f: F) -> BuildCursor<After>
     {
-        <List<'a, KV>>::serialize(origin, cur.behind(0), f)
+        <List<'a, KV>>::serialize(origin, cur.transmute(), f)
     }
 }
 
