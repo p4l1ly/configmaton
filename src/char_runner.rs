@@ -1,6 +1,6 @@
 use indexmap::IndexSet;
 
-use crate::blob::{U8State, U8StateIterator, UnsafeIterator};
+use crate::blob::{state::{U8State, U8StateIterator}, UnsafeIterator};
 
 pub struct Runner<'a> {
     // Mapping from symbols to such current states from which a transition via the symbol exists.
