@@ -19,7 +19,7 @@ impl<'a, K, V> Flagellum<'a, K, V> {
     (cur: BuildCursor<Self>, mut fk: FK, mut fv: FV) -> BuildCursor<After>
     {
         fk(&mut (*cur.get_mut()).key);
-        fv(cur.behind::<K>(0).behind(1))
+        fv(cur.transmute::<K>().behind(1))
     }
 }
 
@@ -28,14 +28,14 @@ impl<'a, K: Build, V: Build> Build for Flagellum<'a, K, V> {
 }
 
 impl<'a, K: Build, V: Build> Flagellum<'a, K, V> {
-    pub fn reserve<RV, FV: Fn(&V::Origin, &mut Reserve) -> RV>
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, RV)
+    pub fn reserve<FV: Fn(&V::Origin, &mut Reserve)>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> usize
     {
         sz.add::<Self>(0);
         let my_addr = sz.0;
         sz.add::<K>(1);
-        let rv = fv(&origin.1, sz);
-        (my_addr, rv)
+        fv(&origin.1, sz);
+        my_addr
     }
 
     pub unsafe fn serialize

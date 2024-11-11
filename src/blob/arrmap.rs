@@ -13,14 +13,16 @@ impl<'a, const SIZE: usize, V: Build> Build for ArrMap<'a, SIZE, V> {
 }
 
 impl<'a, const SIZE: usize, V: Build> ArrMap<'a, SIZE, V> {
-    pub fn reserve<RV, FV: Fn(&V::Origin, &mut Reserve) -> RV>
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, [RV; SIZE])
+    pub fn reserve<FV: FnMut(&V::Origin, &mut Reserve)>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut fv: FV) -> usize
     {
         sz.add::<Self>(0);
         let my_addr = sz.0;
         sz.add::<Self>(1);
-        let vaddrs = origin.each_ref().map(|v| fv(v, sz));
-        (my_addr, vaddrs)
+        for v in origin.iter() {
+            fv(v, sz);
+        }
+        my_addr
     }
 
     pub unsafe fn serialize

@@ -24,14 +24,13 @@ impl<'a, K: Build, V: Build> Build for VecMap<'a, K, V> {
 }
 
 impl<'a, K: Build, V: Build> VecMap<'a, K, V> {
-    pub fn reserve<RV, FV: Fn(&V::Origin, &mut Reserve) -> RV>
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fv: FV) -> (usize, Vec<RV>)
+    pub fn reserve<FV: FnMut(&V::Origin, &mut Reserve)>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut fv: FV) -> usize
     {
         let my_addr = <VecMapVec<'a, K, V>>::reserve(origin, sz);
-        let mut vaddrs = Vec::with_capacity(origin.len());
-        for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
+        for (_, v) in origin.iter() { fv(v, sz); }
         sz.add::<V>(0);
-        (my_addr, vaddrs)
+        my_addr
     }
 
     pub fn key_addr(my_addr: usize, ix: usize) -> usize {

@@ -1,14 +1,15 @@
 use std::marker::PhantomData;
 
-use super::{UnsafeIterator, Build, BuildCursor, Reserve, Shifter, get_behind_struct};
+use super::{UnsafeIterator, Build, BuildCursor, Reserve, Shifter};
 
 #[repr(C)]
 pub struct List<'a, X> {
-    next: *const List<'a, X>,
-    _phantom: PhantomData<&'a X>,
+    next: *const Self,
+    value: X,
+    _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a, X> UnsafeIterator for *const List<'a, X> {
+impl<'a, X: 'a> UnsafeIterator for *const List<'a, X> {
     type Item = &'a X;
     unsafe fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -17,7 +18,7 @@ impl<'a, X> UnsafeIterator for *const List<'a, X> {
             }
             let item = *self;
             *self = (*item).next;
-            return Some(&*get_behind_struct::<_, X>(item));
+            return Some(&(*item).value);
         }
     }
 }
@@ -29,7 +30,7 @@ impl<'a, X> List<'a, X> {
     {
         loop {
             let alist = &mut *cur.get_mut();
-            cur = f(cur.behind(1));
+            cur = f(cur.transmute::<*const Self>().behind(1));
             if alist.next.is_null() { return cur.align(); }
             Shifter(cur.buf).shift(&mut alist.next);
         }
@@ -41,15 +42,15 @@ impl<'a, X: Build> Build for List<'a, X> {
 }
 
 impl<'a, X: Build> List<'a, X> {
-    pub fn reserve<R, F: Fn(&X::Origin, &mut Reserve) -> R>
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, f: F) -> (usize, Vec<R>)
+    pub fn reserve<F: FnMut(&X::Origin, &mut Reserve)>
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut f: F) -> usize
     {
         sz.add::<Self>(0);
         let my_addr = sz.0;
         let mut results = Vec::with_capacity(origin.len());
-        for x in origin.iter() { sz.add::<Self>(1); results.push(f(x, sz)); }
+        for x in origin.iter() { sz.add::<*const Self>(1); results.push(f(x, sz)); }
         sz.add::<Self>(0);
-        (my_addr, results)
+        my_addr
     }
 
     pub unsafe fn serialize
@@ -62,10 +63,10 @@ impl<'a, X: Build> List<'a, X> {
         for (i, x) in origin.iter().enumerate() {
             if i == origin.len() - 1 {
                 (*cur.get_mut()).next = std::ptr::null();
-                cur = f(x, cur.behind(1));
+                cur = f(x, cur.transmute::<*const Self>().behind(1));
             } else {
                 let next = &mut (*cur.get_mut()).next;
-                cur = f(x, cur.behind(1));
+                cur = f(x, cur.transmute::<*const Self>().behind(1));
                 *next = cur.cur as *const Self;
             }
         }

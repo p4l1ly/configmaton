@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 
-use super::{Build, BuildCursor, Reserve, UnsafeIterator, get_behind_struct, align_up};
+use super::{
+    Build, BuildCursor, Reserve, UnsafeIterator, get_behind_struct, align_up, align_up_ptr,
+};
 
 #[repr(C)]
 pub struct BlobVec<'a, X> {
@@ -14,7 +16,7 @@ impl<'a, X: Build> Build for BlobVec<'a, X> {
 
 pub struct BlobVecIter<'a, X> {
     cur: *const X,
-    end: *const X,
+    pub end: *const X,
     _phantom: PhantomData<&'a X>,
 }
 
@@ -24,12 +26,17 @@ impl<'a, X> BlobVec<'a, X> {
         BlobVecIter { cur, end: cur.add(self.len), _phantom: PhantomData }
     }
 
+    pub unsafe fn behind<After>(&self) -> &'a After {
+        let cur = get_behind_struct::<_, X>(self);
+        &*align_up_ptr(cur.add(self.len))
+    }
+
     pub unsafe fn get(&self, ix: usize) -> &X {
         assert!(ix < self.len);
         &*get_behind_struct::<_, X>(self).add(ix)
     }
 
-    pub unsafe fn as_ref(&self) -> &[X] {
+    pub unsafe fn as_ref(&self) -> &'a [X] {
         std::slice::from_raw_parts(get_behind_struct::<_, X>(self), self.len)
     }
 

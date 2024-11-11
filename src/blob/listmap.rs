@@ -1,14 +1,14 @@
 use std::marker::PhantomData;
 
 use super::{
-    get_behind_struct, list::List, AssocsSuper, Build, BuildCursor, Matches, Reserve, Shifter,
+    list::List, AssocsSuper, Build, BuildCursor, Matches, Reserve, Shifter,
     UnsafeIterator, Assocs,
 };
 
 #[repr(C)]
 pub struct ListMapItem<K, V> {
     val: *const V,
-    _phantom: PhantomData<K>,
+    key: K,
 }
 
 impl<K: Build, V: Build> Build for ListMapItem<K, V> {
@@ -28,18 +28,15 @@ impl<'a, K: Build, V: Build> Build for ListMap<'a, K, V> {
 
 impl<'a, K: Build, V: Build> ListMap<'a, K, V> {
     pub fn reserve<
-        RK, RV,
-        FK: Fn(&K::Origin, &mut Reserve) -> RK,
-        FV: Fn(&V::Origin, &mut Reserve) -> RV,
+        FK: FnMut(&K::Origin, &mut Reserve),
+        FV: FnMut(&V::Origin, &mut Reserve),
     >
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, fk: FK, fv: FV) -> (usize, Vec<RK>, Vec<RV>)
-    {
-        let (my_addr, kaddrs) = <ListMapList<'a, K, V>>::reserve(origin, sz,
+    (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut fk: FK, mut fv: FV) -> usize {
+        let my_addr = <ListMapList<'a, K, V>>::reserve(origin, sz,
             |(k, _), sz| { sz.add::<ListMapItem<K, V>>(1); fk(k, sz) });
-        let mut vaddrs = Vec::with_capacity(origin.len());
-        for (_, v) in origin.iter() { vaddrs.push(fv(v, sz)); }
+        for (_, v) in origin.iter() { fv(v, sz); }
         sz.add::<V>(0);
-        (my_addr, kaddrs, vaddrs)
+        my_addr
     }
 
     pub unsafe fn serialize
@@ -55,7 +52,7 @@ impl<'a, K: Build, V: Build> ListMap<'a, K, V> {
         let mut item_curs = Vec::with_capacity(origin.len());
         let mut vcur = <ListMapList<'a, K, V>>::serialize(origin, kcur, |kv, item_cur| {
             item_curs.push(item_cur.clone());
-            fk(&kv.0, item_cur.behind(1))
+            fk(&kv.0, item_cur.transmute::<*const V>().behind(1))
         });
         for (kv, item_cur) in origin.iter().zip(item_curs) {
             (*item_cur.get_mut()).val = vcur.cur as *const V;
@@ -79,7 +76,7 @@ impl<'a, K, V> ListMap<'a, K, V> {
         let mut vcur = ListMapList::deserialize(kcur, |item_cur| {
             len += 1;
             shifter.shift(&mut (*item_cur.get_mut()).val);
-            fk(item_cur.behind(1))
+            fk(item_cur.transmute::<*const V>().behind(1))
         });
         for _ in 0..len { vcur = fv(vcur); }
         vcur.align()
@@ -92,14 +89,13 @@ pub struct ListMapIter<'a, 'b, X, K, V> {
     _phantom: PhantomData<&'a K>,
 }
 
-impl<'a, 'b, X: Matches<K>, K, V: 'b> UnsafeIterator for ListMapIter<'a, 'b, X, K, V> {
+impl<'a, 'b, X: Matches<K>, K, V: 'a + 'b> UnsafeIterator for ListMapIter<'a, 'b, X, K, V> {
     type Item = (&'a K, &'a V);
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.list_iter.next() {
-            let key = get_behind_struct::<_, K>(item);
-            if self.x.matches(&*key) {
-                return Some((&*key, &*item.val));
+            if self.x.matches(&item.key) {
+                return Some((&item.key, &*item.val));
             }
         }
         None
