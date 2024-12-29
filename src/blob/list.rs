@@ -47,8 +47,7 @@ impl<'a, X: Build> List<'a, X> {
     {
         sz.add::<Self>(0);
         let my_addr = sz.0;
-        let mut results = Vec::with_capacity(origin.len());
-        for x in origin.iter() { sz.add::<*const Self>(1); results.push(f(x, sz)); }
+        for x in origin.iter() { sz.add::<*const Self>(1); f(x, sz); }
         sz.add::<Self>(0);
         my_addr
     }

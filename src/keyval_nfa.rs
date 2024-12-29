@@ -8,13 +8,14 @@ use serde_json;
 use serde_json::Value;
 
 use crate::ast;
+use crate::blob::bdd::BddOrigin;
 use crate::char_enfa;
 use crate::char_nfa;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Ext {
     GetOld(String),
-    Ext(Value),
+    Ext(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,22 +46,57 @@ impl Target {
     }
 }
 
-#[derive(Debug)]
-pub struct Bdd {
-    pub leaves: Vec<Target>,
-    // (dfa_ix, pos, neg) where pos and neg are primarily indices to leaves and if they are bigger
-    // than the number of leaves, they are indices to nodes.
-    pub nodes: Vec<(DfaIx, usize, usize)>,
+fn fmte(exts: &Vec<Ext>) -> String {
+    exts.iter().map(|ext| match ext {
+        Ext::GetOld(s) => format!("GetOld({})", s),
+        Ext::Ext(v) => format!("{:?}", v),
+    }).collect::<Vec<_>>().join(", ").replace("\\", "\\\\").replace("\"", "\\\"")
 }
 
-#[derive(Debug)]
+pub fn to_dot
+    <F: FnMut(String)>
+    (bdd: &BddOrigin<usize, Target>, bix: &mut usize, tix: &mut usize, write: &mut F)
+    -> String
+{
+    let mut visited = HashMap::new();
+    match bdd {
+        BddOrigin::Leaf(target) => {
+            let me = format!("t{}", tix);
+            write(format!("  t{} [ shape=\"square\" ]\n", tix));
+            write(format!("  e{} [ shape=\"diamond\" ]\n", tix));
+            write(format!("  t{} -> e{} [label=\"{}\"]\n",
+                tix, tix, fmte(&target.exts)));
+            for state in target.states.iter()
+                { write(format!("  e{} -> q{}\n", tix, state.0)); }
+            *tix += 1;
+            me
+        }
+        _ => {
+            let dtag = bdd.get_var();
+            let pos = unsafe { bdd.get_pos() };
+            let neg = unsafe { bdd.get_neg() };
+            let me = format!("b{}", bix);
+            write(format!("  {} [ shape=\"diamond\", label=\"{}\" ]\n", me, dtag));
+            *bix += 1;
+            let pos = visited.entry(pos as *const _)
+                .or_insert_with(|| to_dot(pos, bix, tix, write));
+            write(format!("  {} -> {} [ color=green{} ]\n", me, pos,
+                if bdd.owns_pos() { ", penwidth=2" } else { "" }));
+            let neg = visited.entry(neg as *const _)
+                .or_insert_with(|| to_dot(neg, bix, tix, write));
+            write(format!("  {} -> {} [ color=red{} ]\n", me, neg,
+                if bdd.owns_neg() { ", penwidth=2" } else { "" }));
+            me
+        }
+    }
+}
+
 pub struct Tran {
     key: String,
     dfa_inits: Vec<DfaStateIx>,
-    bdd: Bdd,
+    bdd: BddOrigin<usize, Target>,
 }
 
-#[derive(Debug)]
 pub struct State {
     pub transitions: Vec<Tran>,
 }
@@ -118,10 +154,11 @@ impl Parser {
             self.states.push(State { transitions: vec![Tran {
                 key: key.clone(),
                 dfa_inits: vec![*dfa_state_ix],
-                bdd: Bdd {
-                    leaves: vec![then, else_],
-                    nodes: vec![(*dfa_ix, 0, 1)],
-                },
+                bdd: BddOrigin::NodeBothOwned {
+                    var: dfa_ix.0,
+                    pos: Box::new(BddOrigin::Leaf(then)),
+                    neg: Box::new(BddOrigin::Leaf(else_)),
+                }
             }]});
             then = Target {
                 exts: vec![Ext::GetOld(key.clone())],
@@ -137,10 +174,11 @@ impl Parser {
             self.states.push(State { transitions: vec![Tran {
                 key: key.clone(),
                 dfa_inits: vec![*dfa_state_ix],
-                bdd: Bdd {
-                    leaves: vec![then, else_],
-                    nodes: vec![(*dfa_ix, 0, 1)],
-                },
+                bdd: BddOrigin::NodeBothOwned {
+                    var: dfa_ix.0,
+                    pos: Box::new(BddOrigin::Leaf(then)),
+                    neg: Box::new(BddOrigin::Leaf(else_))
+                }
             }]});
 
             then = Target {
@@ -160,13 +198,6 @@ impl Parser {
         for i in 0..self.states.len() {
             write(format!("  q{}\n", i));
         }
-
-        let fmte = |exts: &Vec<Ext>| -> String {
-            exts.iter().map(|ext| match ext {
-                Ext::GetOld(s) => format!("GetOld({})", s),
-                Ext::Ext(v) => format!("{:?}", v),
-            }).collect::<Vec<_>>().join(", ").replace("\\", "\\\\").replace("\"", "\\\"")
-        };
 
         // println!("~~~ {:?} ~~~> {:?}", init.exts, init.states);
         write("  ti [ shape=\"square\" ]\n".to_owned());
@@ -190,41 +221,9 @@ impl Parser {
                         write(format!("  g{} -> d{} [color=\"blue\"]\n", gix, dix.0));
                     }
 
-                    let tix0 = tix;
+                    let root = to_dot(&tran.bdd, &mut bix, &mut tix, &mut write);
 
-                    for target in tran.bdd.leaves.iter() {
-                        write(format!("  t{} [ shape=\"square\" ]\n", tix));
-                        write(format!("  e{} [ shape=\"diamond\" ]\n", tix));
-                        write(format!("  t{} -> e{} [label=\"{}\"]\n",
-                            tix, tix, fmte(&target.exts)));
-                        for state in target.states.iter()
-                            { write(format!("  e{} -> q{}\n", tix, state.0)); }
-                        tix += 1;
-                    }
-
-                    let llen = tran.bdd.leaves.len();
-                    let bix0 = bix;
-
-                    for (dtag, pos, neg) in tran.bdd.nodes.iter() {
-                        write(format!("  b{} [ shape=\"diamond\", label=\"{}\" ]\n", bix, dtag.0));
-                        if *pos < llen {
-                            write(format!("  b{} -> t{} [ color=green ]\n", bix, tix0 + *pos));
-                        } else {
-                            write(format!("  b{} -> b{} [ color=green ]\n", bix, bix0 + *pos - llen));
-                        }
-                        if *neg < llen {
-                            write(format!("  b{} -> t{} [ color=red ]\n", bix, tix0 + *neg));
-                        } else {
-                            write(format!("  b{} -> b{} [ color=red ]\n", bix, bix0 + *neg - llen));
-                        }
-                        bix += 1;
-                    }
-
-                    if tran.bdd.nodes.is_empty() {
-                        write(format!("  g{} -> t{}\n", gix, tix - 1));
-                    } else {
-                        write(format!("  g{} -> b{}\n", gix, bix - 1));
-                    }
+                    write(format!("  g{} -> {}\n", gix, root));
 
                     gix += 1;
                 }
@@ -255,7 +254,7 @@ pub enum Cmd {
 #[derive(Debug, serde::Deserialize)]
 pub struct Match {
     when: Vec<(String, String)>,
-    run: Vec<Value>,
+    run: Vec<String>,
     then: Vec<Cmd>,
 }
 
@@ -353,19 +352,19 @@ mod tests {
                     "foo": "bar",
                     "qux": "a.*"
                 },
-                "run": [ { "set": { "match1": "passed" } } ]
+                "run": [ "m1" ]
             },
             {
                 "when": { "foo": "baz" },
-                "run": [ { "set": { "match2": "passed" } } ],
+                "run": [ "m2" ],
                 "then": [
                     {
                         "when": { "qux": "a.*" },
-                        "run": [ { "set": { "match3": "passed" } } ]
+                        "run": [ "m3" ]
                     },
                     {
                         "when": { "qux": "ahoy" },
-                        "run": [ { "set": { "match4": "passed" } } ]
+                        "run": [ "m4" ]
                     }
                 ]
             }

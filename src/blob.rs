@@ -19,6 +19,8 @@ pub mod vecmap;
 pub mod listmap;
 pub mod arrmap;
 pub mod state;
+pub mod bdd;
+pub mod keyval_state;
 
 pub trait MyHash {
     fn my_hash(&self) -> usize;
@@ -105,6 +107,14 @@ pub struct BuildCursor<A>{
 impl<A> BuildCursor<A> {
     pub fn new(buf: *mut u8) -> Self {
         Self { cur: 0, buf, _phantom: PhantomData }
+    }
+
+    pub fn goto<B>(&self, at: *mut B) -> BuildCursor<B> {
+        BuildCursor {
+            cur: at as usize - self.buf as usize,
+            buf: self.buf,
+            _phantom: PhantomData
+        }
     }
 
     pub fn inc(&mut self) {
