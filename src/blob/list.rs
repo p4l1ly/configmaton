@@ -4,7 +4,7 @@ use super::{UnsafeIterator, Build, BuildCursor, Reserve, Shifter};
 
 #[repr(C)]
 pub struct List<'a, X> {
-    next: *const Self,
+    pub next: *const Self,
     value: X,
     _phantom: PhantomData<&'a ()>,
 }

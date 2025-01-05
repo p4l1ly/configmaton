@@ -73,6 +73,15 @@ pub trait UnsafeIterator {
     unsafe fn next(&mut self) -> Option<Self::Item>;
 }
 
+pub struct FakeSafeIterator<T: UnsafeIterator>(pub T);
+
+impl<T: UnsafeIterator> Iterator for FakeSafeIterator<T> {
+    type Item = T::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe { self.0.next() }
+    }
+}
+
 fn align_up(offset: usize, align: usize) -> usize {
     (offset + align - 1) & !(align - 1)
 }
@@ -85,7 +94,7 @@ pub fn align_up_ptr<A, B>(a: *const A) -> *const B {
     align_up(a as usize, align_of::<B>()) as *const B
 }
 
-unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
+pub unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
     align_up((a as *const u8).add(size_of::<A>()) as usize, align_of::<B>()) as *const B
 }
 
@@ -197,22 +206,10 @@ pub trait Build {
     type Origin;
 }
 
-impl Build for u8 {
-    type Origin = u8;
-}
-
-impl Build for Guard {
-    type Origin = Guard;
-}
-
-impl Build for usize {
-    type Origin = usize;
-}
-
-impl Build for () {
-    type Origin = ();
-}
-
+impl Build for u8 { type Origin = u8; }
+impl Build for Guard { type Origin = Guard; }
+impl Build for usize { type Origin = usize; }
+impl Build for () { type Origin = (); }
 
 #[cfg(test)]
 pub mod tests {
@@ -392,7 +389,7 @@ pub mod tests {
         );
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(0) });
-        unsafe { Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::serialize::<(), _, _>(
+        let _: BuildCursor<()> = unsafe { Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::serialize(
             &origin, cur,
             |x, xcur| Sediment::<BlobVec<u8>>::serialize(x, xcur,
                 |x, bcur| BlobVec::<u8>::serialize(x, bcur, |y, ycur| { *ycur = *y; })),

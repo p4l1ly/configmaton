@@ -9,14 +9,11 @@ use serde_json::Value;
 
 use crate::ast;
 use crate::blob::bdd::BddOrigin;
+use crate::blob::keyval_state::LeafOrigin;
+use crate::blob::keyval_state::StateOrigin;
+use crate::blob::keyval_state::TranOrigin;
 use crate::char_enfa;
 use crate::char_nfa;
-
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub enum Ext {
-    GetOld(String),
-    Ext(String),
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StateIx (pub usize);
@@ -25,37 +22,40 @@ pub struct DfaIx (pub usize);
 #[derive(Debug, Clone, Copy)]
 pub struct DfaStateIx (pub usize);
 
-#[derive(Debug)]
-pub struct Target {
-    pub exts: Vec<Ext>,
-    pub states: Vec<StateIx>,
-}
-
-impl Target {
-    pub fn join<'a, I: Iterator<Item=Self>>(targets: I) -> Self {
-        let mut exts = HashSet::new();
-        let mut states = HashSet::new();
-        for target in targets {
-            exts.extend(target.exts.into_iter());
-            states.extend(target.states.into_iter());
-        }
-        Target {
-            exts: exts.into_iter().collect(),
-            states: states.into_iter().collect(),
-        }
+pub fn join_leaves<I: Iterator<Item=LeafOrigin>>(targets: I) -> LeafOrigin {
+    let mut states = HashSet::new();
+    let mut get_olds = HashSet::new();
+    let mut exts = HashSet::new();
+    for target in targets {
+        states.extend(target.states.into_iter());
+        get_olds.extend(target.get_olds.into_iter());
+        exts.extend(target.exts.into_iter());
+    }
+    LeafOrigin {
+        exts: exts.into_iter().collect(),
+        get_olds: get_olds.into_iter().collect(),
+        states: states.into_iter().collect(),
     }
 }
 
-fn fmte(exts: &Vec<Ext>) -> String {
-    exts.iter().map(|ext| match ext {
-        Ext::GetOld(s) => format!("GetOld({})", s),
-        Ext::Ext(v) => format!("{:?}", v),
-    }).collect::<Vec<_>>().join(", ").replace("\\", "\\\\").replace("\"", "\\\"")
+fn bytes_as_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|b|
+        if b.is_ascii_graphic()
+            { char::from(*b).to_string() }
+        else
+            { format!("\\{}", b) }
+    ).collect()
+}
+
+fn fmte(exts: &Vec<Vec<u8>>, get_olds: &Vec<Vec<u8>>) -> String {
+    exts.iter().map(|ext| bytes_as_string(ext)).chain(
+        get_olds.iter().map(|old| format!("GetOld({})", bytes_as_string(old)))
+    ).collect::<Vec<_>>().join(", ").replace("\\", "\\\\").replace("\"", "\\\"")
 }
 
 pub fn to_dot
     <F: FnMut(String)>
-    (bdd: &BddOrigin<usize, Target>, bix: &mut usize, tix: &mut usize, write: &mut F)
+    (bdd: &BddOrigin<usize, LeafOrigin>, bix: &mut usize, tix: &mut usize, write: &mut F)
     -> String
 {
     let mut visited = HashMap::new();
@@ -65,9 +65,9 @@ pub fn to_dot
             write(format!("  t{} [ shape=\"square\" ]\n", tix));
             write(format!("  e{} [ shape=\"diamond\" ]\n", tix));
             write(format!("  t{} -> e{} [label=\"{}\"]\n",
-                tix, tix, fmte(&target.exts)));
+                tix, tix, fmte(&target.exts, &target.get_olds)));
             for state in target.states.iter()
-                { write(format!("  e{} -> q{}\n", tix, state.0)); }
+                { write(format!("  e{} -> q{}\n", tix, state)); }
             *tix += 1;
             me
         }
@@ -91,24 +91,14 @@ pub fn to_dot
     }
 }
 
-pub struct Tran {
-    key: String,
-    dfa_inits: Vec<DfaStateIx>,
-    bdd: BddOrigin<usize, Target>,
-}
-
-pub struct State {
-    pub transitions: Vec<Tran>,
-}
-
 pub struct Parser {
-    pub states: Vec<State>,
+    pub states: Vec<StateOrigin>,
     pub nfa: char_nfa::Nfa,
     pub regexes: HashMap<String, (DfaStateIx, DfaIx)>,
 }
 
 impl Parser {
-    pub fn parse(cmds: Vec<Cmd>) -> (Self, Target) {
+    pub fn parse(cmds: Vec<Cmd>) -> (Self, LeafOrigin) {
         let mut parser = Parser {
             states: vec![],
             nfa: char_nfa::Nfa::new(),
@@ -119,20 +109,20 @@ impl Parser {
         (parser, init)
     }
 
-    fn parse_parallel(&mut self, cmds: Vec<Cmd>) -> Target {
+    fn parse_parallel(&mut self, cmds: Vec<Cmd>) -> LeafOrigin {
         let targets = cmds.into_iter().map(|cmd| match cmd {
             Cmd::Match(match_) => self.parse_match(match_),
             _ => unimplemented!(),
         });
-        Target::join(targets)
+        join_leaves(targets)
     }
 
     fn parse_match(
         &mut self,
         match_: Match,
-    ) -> Target {
+    ) -> LeafOrigin {
         let mut then = self.parse_parallel(match_.then);
-        then.exts.extend(match_.run.into_iter().map(|ext| Ext::Ext(ext)));
+        then.exts.extend(match_.run);
 
         if match_.when.is_empty() { return then; }
 
@@ -150,19 +140,22 @@ impl Parser {
             match_.when[..guard_count - 1].into_iter().zip(dfa_ixs.iter()).rev()
         {
             let state_ix = self.states.len();
-            let else_ = Target { exts: vec![], states: vec![StateIx(state_ix + guard_count)] };
-            self.states.push(State { transitions: vec![Tran {
-                key: key.clone(),
-                dfa_inits: vec![*dfa_state_ix],
+            let else_ = LeafOrigin {
+                exts: vec![], get_olds: vec![], states: vec![state_ix + guard_count]
+            };
+            self.states.push(StateOrigin { transitions: vec![TranOrigin {
+                key: key.clone().into_bytes(),
+                dfa_inits: vec![dfa_state_ix.0],
                 bdd: BddOrigin::NodeBothOwned {
                     var: dfa_ix.0,
                     pos: Box::new(BddOrigin::Leaf(then)),
                     neg: Box::new(BddOrigin::Leaf(else_)),
                 }
             }]});
-            then = Target {
-                exts: vec![Ext::GetOld(key.clone())],
-                states: vec![StateIx(state_ix)],
+            then = LeafOrigin {
+                exts: vec![],
+                get_olds: vec![key.clone().into_bytes()],
+                states: vec![state_ix],
             };
         }
 
@@ -170,10 +163,11 @@ impl Parser {
             match_.when[..guard_count].into_iter().zip(dfa_ixs.iter()).rev()
         {
             let state_ix = self.states.len();
-            let else_ = Target { exts: vec![], states: vec![StateIx(state_ix)] };
-            self.states.push(State { transitions: vec![Tran {
-                key: key.clone(),
-                dfa_inits: vec![*dfa_state_ix],
+            let else_ = LeafOrigin
+                { exts: vec![], get_olds: vec![], states: vec![state_ix] };
+            self.states.push(StateOrigin { transitions: vec![TranOrigin {
+                key: key.clone().into_bytes(),
+                dfa_inits: vec![dfa_state_ix.0],
                 bdd: BddOrigin::NodeBothOwned {
                     var: dfa_ix.0,
                     pos: Box::new(BddOrigin::Leaf(then)),
@@ -181,16 +175,17 @@ impl Parser {
                 }
             }]});
 
-            then = Target {
-                exts: vec![Ext::GetOld(key.clone())],
-                states: vec![StateIx(state_ix)],
+            then = LeafOrigin {
+                exts: vec![],
+                get_olds: vec![key.clone().into_bytes()],
+                states: vec![state_ix],
             };
         }
 
         then
     }
 
-    pub fn to_dot<W: Write>(&self, init: &Target, mut writer: W) {
+    pub fn to_dot<W: Write>(&self, init: &LeafOrigin, mut writer: W) {
         writer.write_all(b"digraph G {\n").unwrap();
 
         let mut write = |x: String| writer.write_all(x.as_bytes()).unwrap();
@@ -203,9 +198,9 @@ impl Parser {
         write("  ti [ shape=\"square\" ]\n".to_owned());
         write("  ei [ shape=\"diamond\" ]\n".to_owned());
 
-        write(format!("  ti -> ei [label=\"{}\"]\n", fmte(&init.exts)));
+        write(format!("  ti -> ei [label=\"{}\"]\n", fmte(&init.exts, &init.get_olds)));
         for state in init.states.iter() {
-            write(format!("  ei -> q{}\n", state.0));
+            write(format!("  ei -> q{}\n", state));
         }
 
         {
@@ -215,10 +210,11 @@ impl Parser {
             for (qix, state) in self.states.iter().enumerate() {
                 for tran in state.transitions.iter() {
                     write(format!("  g{} [ shape=\"diamond\" ]\n", gix));
-                    write(format!("  q{} -> g{} [label=\"{}\"]\n", qix, gix, tran.key));
+                    write(format!("  q{} -> g{} [label=\"{}\"]\n",
+                        qix, gix, bytes_as_string(&tran.key)));
 
                     for dix in tran.dfa_inits.iter() {
-                        write(format!("  g{} -> d{} [color=\"blue\"]\n", gix, dix.0));
+                        write(format!("  g{} -> d{} [color=\"blue\"]\n", gix, dix));
                     }
 
                     let root = to_dot(&tran.bdd, &mut bix, &mut tix, &mut write);
@@ -254,7 +250,7 @@ pub enum Cmd {
 #[derive(Debug, serde::Deserialize)]
 pub struct Match {
     when: Vec<(String, String)>,
-    run: Vec<String>,
+    run: Vec<Vec<u8>>,
     then: Vec<Cmd>,
 }
 
@@ -272,7 +268,7 @@ impl<'de> Visitor<'de> for CmdVisitor {
         V: MapAccess<'de>,
     {
         let mut when = None;
-        let mut run = None;
+        let mut run: Option<Vec<String>> = None;
         let mut then = None;
         while let Some(key) = map.next_key()? {
             match key {
@@ -323,7 +319,7 @@ impl<'de> Visitor<'de> for CmdVisitor {
             }
         }
         let when = when.ok_or_else(|| Error::missing_field("when"))?;
-        let run = run.unwrap_or_else(|| vec![]);
+        let run = run.unwrap_or_else(|| vec![]).into_iter().map(|s| s.into_bytes()).collect();
         let then = then.unwrap_or_else(|| vec![]);
         Ok(Cmd::Match(Match { when, run, then }))
     }
