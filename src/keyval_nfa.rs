@@ -8,10 +8,25 @@ use serde_json;
 use serde_json::Value;
 
 use crate::ast;
+use crate::blob::align_up_mut_ptr;
+use crate::blob::automaton::Automaton;
+use crate::blob::automaton::ExtsAndAut;
+use crate::blob::automaton::InitsAndStates;
+use crate::blob::automaton::States;
 use crate::blob::bdd::BddOrigin;
+use crate::blob::keyval_state::KeyValState;
 use crate::blob::keyval_state::LeafOrigin;
 use crate::blob::keyval_state::StateOrigin;
 use crate::blob::keyval_state::TranOrigin;
+use crate::blob::keyval_state::Bytes;
+use crate::blob::sediment::Sediment;
+use crate::blob::state::build::U8BuildConfig;
+use crate::blob::state::U8State;
+use crate::blob::state::U8StatePrepared;
+use crate::blob::vec::BlobVec;
+use crate::blob::BuildCursor;
+use crate::blob::Reserve;
+use crate::blob::Shifter;
 use crate::char_enfa;
 use crate::char_nfa;
 
@@ -335,8 +350,131 @@ impl<'de> Deserialize<'de> for Cmd {
 }
 
 
+pub struct Msg {
+    _owner: Vec<u8>,
+    data: *const u8,
+    len: usize,
+}
+
+impl Msg {
+    pub fn get_data(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.data, self.len) }
+    }
+
+    pub unsafe fn read<R: FnOnce(*mut u8)>(ext_read: R, len: usize) -> Msg {
+        let mut buff = vec![0; len + size_of::<usize>()];
+        let buf = align_up_mut_ptr::<u8, u128>(buff.as_mut_ptr()) as *mut u8;
+        ext_read(buf);
+        Msg::deserialize(buf);
+        Msg { _owner: buff, data: buf, len }
+    }
+
+    pub fn get_automaton<'a>(&'a self) -> &'a Automaton<'a> {
+        unsafe { &*(self.data as *const Automaton<'a>) }
+    }
+
+    pub unsafe fn deserialize<'a>(buf: *mut u8) {
+        let cur = BuildCursor::new(buf);
+        let shifter = Shifter(cur.buf);
+        let _: BuildCursor<()> = unsafe {
+            Automaton::deserialize(cur,
+                |cur| Sediment::<Bytes>::deserialize(cur,
+                    |cur| Bytes::deserialize(cur, |_| ())),
+                |cur| ExtsAndAut::deserialize(cur,
+                    |cur| Sediment::<Bytes>::deserialize(cur,
+                        |cur| Bytes::deserialize(cur, |_| ())),
+                    |cur| InitsAndStates::deserialize(cur,
+                        |cur| BlobVec::<*const KeyValState>::deserialize(cur,
+                            |x| { shifter.shift(x); }),
+                        |cur| States::deserialize(cur,
+                            |cur| Sediment::<KeyValState>::deserialize(cur,
+                                |cur| KeyValState::deserialize(cur)),
+                            |cur| Sediment::<U8State>::deserialize(cur,
+                                |cur| U8State::deserialize(cur)),
+                        )
+                    )
+                )
+            )
+        };
+    }
+
+    pub fn serialize<Cfg: U8BuildConfig>(parser: Parser, init: LeafOrigin, cfg: &Cfg) -> Msg {
+        let u8states = parser.nfa.states.iter()
+            .map(|q| U8StatePrepared::prepare(q, cfg)).collect::<Vec<_>>();
+        let mut sz = Reserve(0);
+        let mut u8qs = Vec::<usize>::new();
+        let mut kvqs = Vec::<usize>::new();
+        let mut origin = (
+            init.get_olds,
+            (
+                init.exts,
+                (
+                    vec![0; init.states.len()],
+                    (
+                        parser.states,
+                        u8states,
+                    )
+                )
+            )
+        );
+
+        Automaton::reserve(&origin, &mut sz,
+            |getolds, sz| {Sediment::<Bytes>::reserve(getolds, sz,
+                |getold, sz| {Bytes::reserve(getold, sz);} );},
+            |exts_and_aut, sz| {ExtsAndAut::reserve(exts_and_aut, sz,
+                |exts, sz| {Sediment::<Bytes>::reserve(exts, sz,
+                    |ext, sz| {Bytes::reserve(ext, sz);} );},
+                |inits_and_states, sz| {InitsAndStates::reserve(inits_and_states, sz,
+                    |inits, sz| { BlobVec::<*const KeyValState>::reserve(inits, sz); },
+                    |states, sz| {States::reserve(states, sz,
+                        |orig_kvqs, sz| {Sediment::<KeyValState>::reserve(orig_kvqs, sz,
+                            |kvq, sz| { kvqs.push(KeyValState::reserve(kvq, sz)) } );},
+                        |orig_u8qs, sz| {Sediment::<U8State>::reserve(orig_u8qs, sz,
+                            |u8q, sz| { u8qs.push(U8State::reserve(u8q, sz)) } );},
+                    );}
+                );}
+            );}
+        );
+
+        for (target, source) in origin.1.1.0.iter_mut().zip(init.states.iter()) {
+            *target = kvqs[*source];
+        }
+
+        let mut buff = vec![0; sz.0 + size_of::<usize>()];
+        let buf = align_up_mut_ptr::<u8, u128>(buff.as_mut_ptr()) as *mut u8;
+        let cur = BuildCursor::new(buf);
+        let _: BuildCursor<()> = unsafe {
+            Automaton::serialize(&origin, cur,
+                |getolds, cur| Sediment::<Bytes>::serialize(getolds, cur,
+                    |getold, cur| Bytes::serialize(getold, cur, |x, y| { *y = *x; })),
+                |exts_and_aut, cur| ExtsAndAut::serialize(exts_and_aut, cur,
+                    |exts, cur| Sediment::<Bytes>::serialize(exts, cur,
+                        |ext, cur| Bytes::serialize(ext, cur, |x, y| { *y = *x; })),
+                    |inits_and_states, cur| InitsAndStates::serialize(inits_and_states, cur,
+                        |inits, cur| BlobVec::<*const KeyValState>::serialize(inits, cur,
+                            |x, y| { *y = *x as *const KeyValState; }),
+                        |states, cur| States::serialize(states, cur,
+                            |orig_kvqs, cur| Sediment::<KeyValState>::serialize(orig_kvqs, cur,
+                                |kvq, cur| KeyValState::serialize(kvq, cur, &u8qs, &kvqs)),
+                            |orig_u8qs, cur| Sediment::<U8State>::serialize(orig_u8qs, cur,
+                                |u8q, cur| U8State::serialize(u8q, cur, &u8qs)),
+                        )
+                    )
+                )
+            )
+        };
+
+        Msg { _owner: buff, data: buf, len: sz.0 }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
+    use indexmap::IndexSet;
+
+    use crate::{blob::tests::TestU8BuildConfig, keyval_simulator::Simulation};
+
     use super::*;
 
     #[test]
@@ -391,5 +529,25 @@ mod tests {
         // The output automaton is for now only for visual checking.
         let file = std::fs::File::create("/tmp/test_simple.dot").unwrap();
         parser.to_dot(&init, std::io::BufWriter::new(file));
+
+        let outmsg = Msg::serialize(parser, init, &TestU8BuildConfig);
+        let inmsg = unsafe { Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.len), outmsg.len) };
+        let aut = inmsg.get_automaton();
+        let mut sim = Simulation::new(aut, |_| None);
+
+        assert!(sim.exts.is_empty());
+        sim.read(b"foo", b"a", |x| match x { b"foo" => Some(b"a"), _ => None });
+        assert!(sim.exts.is_empty());
+        sim.read(b"foo", b"b", |x| match x { b"foo" => Some(b"b"), _ => None });
+        assert!(sim.exts.is_empty());
+        sim.read(b"bar", b"b",
+            |x| match x { b"foo" => Some(b"b"), b"bar" => Some(b"b"), _ => None });
+        assert!(sim.exts.is_empty());
+        sim.read(b"foo", b"a",
+            |x| match x { b"foo" => Some(b"a"), b"bar" => Some(b"b"), _ => None });
+        let ext = b"you win";
+        let mut exts = IndexSet::new();
+        exts.insert(ext.as_slice());
+        assert_eq!(&sim.exts, &exts);
     }
 }

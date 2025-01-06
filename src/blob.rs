@@ -21,6 +21,7 @@ pub mod arrmap;
 pub mod state;
 pub mod bdd;
 pub mod keyval_state;
+pub mod automaton;
 
 pub trait MyHash {
     fn my_hash(&self) -> usize;

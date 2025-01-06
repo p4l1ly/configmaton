@@ -24,8 +24,8 @@ impl<'a> Runner<'a>
     }
 
     // Read a symbol, perform transitions.
-    pub unsafe fn read<GetOld: FnMut(&[u8]), RunExt: FnMut(&[u8])>(
-        &mut self, sym: &[u8], value: &str, mut get_old: GetOld, mut run_ext: RunExt
+    pub unsafe fn read<GetOld: FnMut(&'a [u8]), RunExt: FnMut(&'a [u8])>(
+        &mut self, sym: &[u8], value: &[u8], mut get_old: GetOld, mut run_ext: RunExt
     ) {
         let mut trans = vec![];
 
@@ -56,9 +56,7 @@ impl<'a> Runner<'a>
             trans.iter().flat_map(|tran| FakeSafeIterator(tran.a.iter())).copied()
         );
 
-        for c in value.chars() {
-            crunner.read(c as u8);
-        }
+        for c in value { crunner.read(*c); }
 
         let mut tags = crunner.get_tags().collect::<Vec<_>>();
         tags.sort_unstable();
