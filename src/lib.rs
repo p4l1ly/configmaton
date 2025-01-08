@@ -1,4 +1,4 @@
-use onion::Onion;
+use onion::{Locker, Onion};
 
 pub mod lock;
 pub mod command;
@@ -16,9 +16,8 @@ pub mod blob;
 pub mod holder;
 pub mod onion;
 
-pub struct Configmaton<'a> {
-    onion: Onion<'a>,
-
+pub struct Configmaton<'a, L: Locker> {
+    onion: Onion<'a, L>,
 }
 
 
