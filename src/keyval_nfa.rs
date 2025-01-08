@@ -351,14 +351,13 @@ impl<'de> Deserialize<'de> for Cmd {
 
 
 pub struct Msg {
-    _owner: Vec<u8>,
-    data: *const u8,
-    len: usize,
+    owner: Vec<u8>,
+    pub data: *const u8,
 }
 
 impl Msg {
-    pub fn get_data(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.data, self.len) }
+    pub fn data_len(&self) -> usize {
+        self.owner.len() - size_of::<usize>()
     }
 
     pub unsafe fn read<R: FnOnce(*mut u8)>(ext_read: R, len: usize) -> Msg {
@@ -366,7 +365,7 @@ impl Msg {
         let buf = align_up_mut_ptr::<u8, u128>(buff.as_mut_ptr()) as *mut u8;
         ext_read(buf);
         Msg::deserialize(buf);
-        Msg { _owner: buff, data: buf, len }
+        Msg { owner: buff, data: buf }
     }
 
     pub fn get_automaton<'a>(&'a self) -> &'a Automaton<'a> {
@@ -464,7 +463,7 @@ impl Msg {
             )
         };
 
-        Msg { _owner: buff, data: buf, len: sz.0 }
+        Msg { owner: buff, data: buf }
     }
 }
 
@@ -481,7 +480,7 @@ mod tests {
     fn config_to_automaton_complex() {
         // read and parse file tests/config.json
         let config: Vec<Cmd> = serde_json::from_str(r#"[
-            { 
+            {
                 "when": {
                     "foo": "bar",
                     "qux": "a.*"
@@ -531,7 +530,8 @@ mod tests {
         parser.to_dot(&init, std::io::BufWriter::new(file));
 
         let outmsg = Msg::serialize(parser, init, &TestU8BuildConfig);
-        let inmsg = unsafe { Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.len), outmsg.len) };
+        let inmsg = unsafe {
+            Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.data_len()), outmsg.data_len()) };
         let aut = inmsg.get_automaton();
         let mut sim = Simulation::new(aut, |_| None);
 

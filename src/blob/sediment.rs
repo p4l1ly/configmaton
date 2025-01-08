@@ -4,7 +4,7 @@ use super::{Build, BuildCursor, Reserve, get_behind_struct};
 
 #[repr(C)]
 pub struct Sediment<'a, X> {
-    len: usize,
+    pub len: usize,
     _phantom: PhantomData<&'a X>,
 }
 

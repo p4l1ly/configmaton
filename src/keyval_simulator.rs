@@ -2,6 +2,7 @@ use indexmap::IndexSet;
 
 use crate::{blob::{align_up_ptr, automaton::{Automaton, InitsAndStates}, get_behind_struct, keyval_state::{Bytes, KeyValState}, sediment::Sediment, tupellum::Tupellum, vec::BlobVec}, keyval_runner::Runner};
 
+#[derive(Clone)]
 pub struct Simulation<'a> {
     keyval_runner: Runner<'a>,
     pub exts: IndexSet<&'a [u8]>,
@@ -9,10 +10,9 @@ pub struct Simulation<'a> {
 }
 
 impl<'a> Simulation<'a> {
-    pub fn new<F: Fn(&[u8]) -> Option<&[u8]>>(
-        aut1: &Automaton<'a>,
-        db: F,
-    ) -> Self {
+    pub fn new<F: Fn(&'a [u8]) -> Option<&'a [u8]>>
+        (aut1: &Automaton<'a>, db: F) -> Self
+    {
         let mut getolds = IndexSet::new();
         let mut exts = IndexSet::new();
         let mut behind = unsafe { get_behind_struct(aut1) };
@@ -30,33 +30,39 @@ impl<'a> Simulation<'a> {
             behind
         }) };
         let initial_states: &BlobVec<*const KeyValState<'a>> = unsafe { &*align_up_ptr(behind) };
-        let mut runner = Simulation {
+        let mut sim = Simulation {
             keyval_runner: unsafe { Runner::new(initial_states.as_ref().iter().map(|x| &**x )) },
             exts,
             getolds,
         };
-        runner.finish_read(db);
-        runner
+        sim.finish_read(db);
+        sim
     }
 
-    pub fn read<F: Fn(&[u8]) -> Option<&[u8]>>(&mut self, key: &[u8], val: &[u8], db: F) {
+    pub fn read<F: Fn(&'a [u8]) -> Option<&'a [u8]>>
+        (&mut self, key: &'a [u8], val: &'a [u8], db: F)
+    {
         unsafe {
             self.keyval_runner.read(key, val,
                 |getold| { self.getolds.insert(getold); },
                 |ext| { self.exts.insert(ext); }
-            )
+            );
+            dbg!(key, val, &self.keyval_runner.sparse);
         };
         self.finish_read(db)
     }
 
-    fn finish_read<F: Fn(&[u8]) -> Option<&[u8]>>(&mut self, db: F) {
-        while let Some(oldkey) = self.getolds.pop() {
-            if let Some(oldval) = db(&oldkey) {
+    fn finish_read<F: Fn(&'a [u8]) -> Option<&'a [u8]>>
+        (&mut self, db: F)
+    {
+        while let Some(key) = self.getolds.pop() {
+            if let Some(val) = db(&key) {
                 unsafe {
-                    self.keyval_runner.read(oldkey, oldval,
+                    self.keyval_runner.read(key, val,
                         |getold| { self.getolds.insert(getold); },
                         |ext| { self.exts.insert(ext); }
                     );
+                    dbg!(key, val, &self.keyval_runner.sparse);
                 }
             }
         }

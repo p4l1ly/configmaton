@@ -3,9 +3,9 @@ use std::{ops::{Deref, DerefMut}, sync::{RwLock, RwLockReadGuard, RwLockWriteGua
 use hashbrown::HashMap;
 use crate::holder::Holder;
 
-pub struct Onion<'a, L: Locker> {
+pub struct Onion<'a, L: Locker, Child> {
     parent: Option<*const Self>,
-    children: Holder<Self>,
+    children: Holder<Child>,
     data: L::Lock<HashMap<&'a [u8], &'a [u8]>>,
 }
 
@@ -48,7 +48,7 @@ impl Locker for ThreadSafeLocker {
     fn write<'a, T>(lock: &'a mut Self::Lock<T>) -> Self::GuardMut<'a, T> { lock.write().unwrap() }
 }
 
-impl<'a, L: Locker> Onion<'a, L>
+impl<'a, L: Locker, Child> Onion<'a, L, Child>
 {
     pub fn new() -> Self {
         Onion {
@@ -58,19 +58,16 @@ impl<'a, L: Locker> Onion<'a, L>
         }
     }
 
-    pub fn make_child(&mut self) -> &mut Self {
-        self.children.add(Onion {
+    // Unfortunately, I did not find a way to express that the parent outlives child but both
+    // remain mutable.
+    pub fn make_child<NewChild: FnOnce(Self) -> Child>
+        (&mut self, new_child: NewChild) -> *mut Child
+    {
+        self.children.add(new_child(Onion {
             parent: Some(self),
             children: Holder::new(),
             data: L::new(HashMap::new()),
-        })
-    }
-
-    pub fn get_rec(&self, key: &[u8]) -> Option<&'a [u8]> {
-        if let Some(value) = L::read(&self.data).get(key) {
-            return Some(value);
-        }
-        unsafe { &*(self.parent?) }.get_rec(key)
+        }))
     }
 
     pub fn get(&self, key: &[u8]) -> Option<&'a [u8]> {
@@ -90,5 +87,70 @@ impl<'a, L: Locker> Onion<'a, L>
 
     pub fn set(&mut self, key: &'a [u8], value: &'a [u8]) {
         L::write(&mut self.data).insert(key, value);
+    }
+
+    pub fn iter_children(&mut self) -> impl Iterator<Item = *mut Child> {
+        self.children.iter_mut()
+    }
+
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct JustOnion<'a>(Onion<'a, ThreadUnsafeLocker, Self>);
+
+    #[test]
+    fn onion_works() {
+        let mut onion1 = JustOnion(Onion::new());
+        onion1.0.set(b"a", b"1");
+        onion1.0.set(b"b", b"2");
+        onion1.0.set(b"a", b"3");
+        assert_eq!(onion1.0.get(b"a"), Some(b"3".as_ref()));
+        assert_eq!(onion1.0.get(b"b"), Some(b"2".as_ref()));
+        assert_eq!(onion1.0.get(b"c"), None);
+
+        let onion2 = unsafe { &mut *onion1.0.make_child(|onion| JustOnion(onion)) };
+        let onion3 = unsafe { &mut *onion1.0.make_child(|onion| JustOnion(onion)) };
+        onion2.0.set(b"b", b"4");
+        onion2.0.set(b"c", b"5");
+        onion3.0.set(b"b", b"6");
+
+        assert_eq!(onion1.0.get(b"a"), Some(b"3".as_ref()));
+        assert_eq!(onion1.0.get(b"b"), Some(b"2".as_ref()));
+        assert_eq!(onion1.0.get(b"c"), None);
+        assert_eq!(onion3.0.get(b"d"), None);
+
+        assert_eq!(onion2.0.get(b"a"), Some(b"3".as_ref()));
+        assert_eq!(onion2.0.get(b"b"), Some(b"4".as_ref()));
+        assert_eq!(onion2.0.get(b"c"), Some(b"5".as_ref()));
+        assert_eq!(onion2.0.get(b"d"), None);
+
+        assert_eq!(onion3.0.get(b"a"), Some(b"3".as_ref()));
+        assert_eq!(onion3.0.get(b"b"), Some(b"6".as_ref()));
+        assert_eq!(onion3.0.get(b"c"), None);
+        assert_eq!(onion3.0.get(b"d"), None);
+
+        onion1.0.set(b"a", b"7");
+        onion1.0.set(b"b", b"8");
+
+        assert_eq!(onion1.0.get(b"a"), Some(b"7".as_ref()));
+        assert_eq!(onion1.0.get(b"b"), Some(b"8".as_ref()));
+        assert_eq!(onion1.0.get(b"c"), None);
+        assert_eq!(onion3.0.get(b"d"), None);
+
+        assert_eq!(onion2.0.get(b"a"), Some(b"7".as_ref()));
+        assert_eq!(onion2.0.get(b"b"), Some(b"4".as_ref()));
+        assert_eq!(onion2.0.get(b"c"), Some(b"5".as_ref()));
+        assert_eq!(onion2.0.get(b"d"), None);
+
+        assert_eq!(onion3.0.get(b"a"), Some(b"7".as_ref()));
+        assert_eq!(onion3.0.get(b"b"), Some(b"6".as_ref()));
+        assert_eq!(onion3.0.get(b"c"), None);
+        assert_eq!(onion3.0.get(b"d"), None);
     }
 }

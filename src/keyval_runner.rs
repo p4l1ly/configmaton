@@ -7,6 +7,7 @@ use crate::blob::vec::BlobVec;
 use crate::blob::{align_up_ptr, get_behind_struct, FakeSafeIterator, UnsafeIterator};
 use crate::char_runner;
 
+#[derive(Clone)]
 pub struct Runner<'a> {
     // Mapping from symbols to such current states from which a transition via the symbol exists.
     pub sparse: HashMap<&'a [u8], IndexSet<*const KeyValState<'a>>>,
@@ -61,17 +62,21 @@ impl<'a> Runner<'a>
         let mut tags = crunner.get_tags().collect::<Vec<_>>();
         tags.sort_unstable();
         tags.dedup();
+        let tags = tags;
+        dbg!(&tags);
 
         for tran in trans {
             let mut tag_i = 0;
             let target = tran.a.behind::<Finals>().evaluate(|var| {
                 let var = *var;
+                dbg!(var, tag_i);
                 if tag_i == tags.len() { return false; }
-                while var < tags[tag_i] {
+                while tags[tag_i] < var {
+                    dbg!(tags[tag_i]);
                     tag_i += 1;
                     if tag_i == tags.len() { return false; }
                 }
-                if var == tags[tag_i] { tag_i += 1; return true; }
+                if var == tags[tag_i] { tag_i += 1; dbg!(true); return true; }
                 false
             });
             for right_state in target.0.a.as_ref() {
@@ -89,7 +94,6 @@ impl<'a> Runner<'a>
                 run_ext(x.as_ref());
                 x.behind()
             });
-            break;
         }
     }
 
