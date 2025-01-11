@@ -25,6 +25,10 @@ impl<T> Holder<T> {
     pub fn clear(&mut self) {
         self.head = None;
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.head.is_none()
+    }
 }
 
 pub struct Iter<T> {

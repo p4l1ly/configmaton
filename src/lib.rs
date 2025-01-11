@@ -31,21 +31,18 @@ impl<'a, L: Locker> Configmaton<'a, L> {
         }
     }
 
-    pub fn make_child(&mut self) -> *mut Self {
+    // UNSAFE: make sure you don't use children after the parent is dropped.
+    pub unsafe fn make_child(&mut self) -> *mut Self {
         self.onion.make_child(|onion| Configmaton {
             onion,
             simulation: self.simulation.clone(),
         })
     }
 
-    pub fn set(&mut self, key: &'a [u8], value: &'a [u8]) {
+    // UNSAFE: children's simulation is untouched but the onion gets updated.
+    pub unsafe fn set(&mut self, key: &'a [u8], value: &'a [u8]) {
         self.onion.set(key, value);
         self.simulation.read(key, value, |key| { self.onion.get(key) });
-
-        for child in self.onion.iter_children() {
-            let child = unsafe {&mut *child};
-            child.simulation.read(key, value, |key| { child.onion.get(key) });
-        }
     }
 
     pub fn get(&self, key: &[u8]) {
@@ -62,19 +59,16 @@ impl<'a, L: Locker> Configmaton<'a, L> {
         }
     }
 
-    pub fn set_and_handle<F: FnMut(&mut Self, &'a [u8])>
+    // UNSAFE: children's simulation is untouched but the onion gets updated.
+    pub unsafe fn set_and_handle<F: FnMut(&mut Self, &'a [u8])>
         (&mut self, key: &'a [u8], value: &'a [u8], f: &mut F)
     {
         self.set(key, value);
         self.handle_commands(f);
-
-        for child in self.onion.iter_children() {
-            let child = unsafe {&mut *child};
-            child.handle_commands(f);
-        }
     }
 
-    pub fn clear_children(&mut self) {
+    // UNSAFE: make sure you don't use the children after calling this method.
+    pub unsafe fn clear_children(&mut self) {
         self.onion.clear_children();
     }
 }
@@ -141,7 +135,7 @@ mod tests {
         let mut cmds: Vec<&[u8]> = Vec::new();
         let mut configmaton = Configmaton::new(aut);
 
-        configmaton.set_and_handle(b"qux", b"no!", &mut handle!(cmds, b"arrgh"));
+        unsafe { configmaton.set_and_handle(b"qux", b"no!", &mut handle!(cmds, b"arrgh")) };
         assert!(cmds.is_empty());
 
         {
@@ -149,47 +143,28 @@ mod tests {
             let configmaton3 = unsafe { &mut *configmaton.make_child() };
             let configmaton4 = unsafe { &mut *configmaton.make_child() };
 
-            configmaton2.set_and_handle(b"foo", b"bar", &mut handle!(cmds, b"arrgh"));
+            unsafe { configmaton2.set_and_handle(b"foo", b"bar", &mut handle!(cmds, b"arrgh")) };
             assert!(cmds.drain(..).collect::<Vec<_>>().is_empty());
 
-            configmaton3.set_and_handle(b"foo", b"baz", &mut handle!(cmds, b"arrgh"));
+            unsafe { configmaton3.set_and_handle(b"foo", b"baz", &mut handle!(cmds, b"arrgh")) };
             assert_eq!(cmds.drain(..).collect::<Vec<_>>(), vec![b"m2", b"m3"]);
 
-            configmaton2.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh"));
+            unsafe { configmaton2.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh")) };
             assert_eq!(cmds.drain(..).collect::<Vec<_>>(), vec![b"m1"]);
-            configmaton2.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh"));
+            unsafe { configmaton2.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh")) };
             assert!(cmds.drain(..).collect::<Vec<_>>().is_empty());
 
-            configmaton3.set_and_handle(b"qux", b"arrgh", &mut handle!(cmds, b"arrgh"));
+            unsafe { configmaton3.set_and_handle(b"qux", b"arrgh", &mut handle!(cmds, b"arrgh")) };
             assert!(cmds.drain(..).collect::<Vec<_>>().is_empty());
-            configmaton3.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh"));
+            unsafe { configmaton3.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh")) };
             assert_eq!(cmds.drain(..).collect::<Vec<_>>(), vec![b"m4"]);
 
-            configmaton4.set_and_handle(b"foo", b"baz", &mut handle!(cmds, b""));
+            unsafe { configmaton4.set_and_handle(b"foo", b"baz", &mut handle!(cmds, b"")) };
             assert_eq!(cmds.drain(..).collect::<Vec<_>>(), vec![b"m2"]);
-            configmaton4.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh"));
+            unsafe { configmaton4.set_and_handle(b"qux", b"ahoy", &mut handle!(cmds, b"arrgh")) };
             let mut cmds_now = cmds.drain(..).collect::<Vec<_>>();
             cmds_now.sort();
             assert_eq!(cmds_now, vec![b"m3", b"m4"]);
-        }
-
-        // The following interface is quite messy and unsafe, without a real use case.
-        // Changes made to the parent configmaton should be reflected in the children.
-        configmaton.clear_children();
-
-        {
-            let configmaton2 = unsafe { &mut *configmaton.make_child() };
-
-            configmaton2.set_and_handle(b"foo", b"bar", &mut handle!(cmds, b"arrgh"));
-            assert!(cmds.drain(..).collect::<Vec<_>>().is_empty());
-
-            // This invokes the child's m1, as it already has foo: bar.
-            configmaton.set_and_handle(b"qux", b"arrgh", &mut handle!(cmds, b"arrgh"));
-            assert_eq!(cmds.drain(..).collect::<Vec<_>>(), vec![b"m1"]);
-
-            // This finally invokes the parent's m1.
-            configmaton.set_and_handle(b"foo", b"bar", &mut handle!(cmds, b"arrgh"));
-            assert_eq!(cmds.drain(..).collect::<Vec<_>>(), vec![b"m1"]);
         }
     }
 }

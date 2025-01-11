@@ -96,6 +96,10 @@ impl<'a, L: Locker, Child> Onion<'a, L, Child>
     pub fn clear_children(&mut self) {
         self.children.clear();
     }
+
+    pub fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
 }
 
 #[cfg(test)]

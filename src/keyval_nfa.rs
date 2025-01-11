@@ -355,6 +355,9 @@ pub struct Msg {
     pub data: *const u8,
 }
 
+// This is safe because we guarantee that `data` always points into `owner`.
+unsafe impl Send for Msg {}
+
 impl Msg {
     pub fn data_len(&self) -> usize {
         self.owner.len() - size_of::<usize>()
@@ -549,5 +552,17 @@ mod tests {
         let mut exts = IndexSet::new();
         exts.insert(ext.as_slice());
         assert_eq!(&sim.exts, &exts);
+    }
+
+    #[test]
+    fn config_to_automaton_simplest() {
+        // read and parse file tests/config.json
+        let config: Vec<Cmd> = serde_json::from_str(r#"[{"when": {"foo": "a"}, "run": ["bar"]}]"#).unwrap();
+
+        let (parser, init) = Parser::parse(config);
+
+        // The output automaton is for now only for visual checking.
+        let file = std::fs::File::create("/tmp/test_simplest.dot").unwrap();
+        parser.to_dot(&init, std::io::BufWriter::new(file));
     }
 }

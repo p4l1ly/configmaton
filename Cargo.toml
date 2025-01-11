@@ -11,3 +11,20 @@ indexmap = "2.6.0"
 regex-syntax = "0.8.5"
 smallvec = "1.13.2"
 twox-hash = "2.0.0"
+
+hyper = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["full"] }
+tokio-rusqlite = { version = "0.6" }
+rusqlite = { version = "0.32.1" }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+url = "2.4"
+
+[lib]
+name = "configmaton"
+path = "src/lib.rs"
+
+[[bin]]
+name = "configmaton-server"
+path = "src/server.rs"
