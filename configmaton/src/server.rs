@@ -101,7 +101,7 @@ pub fn json_to_automaton_matchrun(json: &str)
 {
     let config: Vec<Cmd> = serde_json::from_str(json)?;
     let (parser, init) = Parser::parse(config);
-    Ok(Msg::serialize(parser, init, &BuildConfig))
+    Ok(Msg::serialize(&parser, &init, &BuildConfig))
 }
 
 async fn handle(app: Arc<RwLock<App>>, req: Request<hyper::body::Incoming>)

@@ -47,7 +47,6 @@ impl<'a> Simulation<'a> {
                 |getold| { self.getolds.insert(getold); },
                 |ext| { self.exts.insert(ext); }
             );
-            dbg!(key, val, &self.keyval_runner.sparse);
         };
         self.finish_read(db)
     }
@@ -62,7 +61,6 @@ impl<'a> Simulation<'a> {
                         |getold| { self.getolds.insert(getold); },
                         |ext| { self.exts.insert(ext); }
                     );
-                    dbg!(key, val, &self.keyval_runner.sparse);
                 }
             }
         }

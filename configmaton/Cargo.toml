@@ -12,8 +12,16 @@ name = "configmaton-server"
 path = "src/server.rs"
 required-features = ["server"]
 
+[[bin]]
+name = "configmaton-cli"
+path = "src/cli.rs"
+required-features = ["cli"]
+
 [features]
 default = []
+cli = [
+    "dep:clap",
+]
 server = [
     "dep:hyper",
     "dep:tokio",
@@ -44,6 +52,7 @@ tokio-rusqlite = { version = "0.6", optional = true }
 rusqlite = { version = "0.32.1", optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh64"], optional = true }
 url = { version = "2.4", optional = true }
+clap = { version = "3.0", features = ["derive"], optional = true }
 
 [package.metadata.docs.rs]
 features = ["server"]

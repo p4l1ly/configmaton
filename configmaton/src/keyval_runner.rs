@@ -63,20 +63,17 @@ impl<'a> Runner<'a>
         tags.sort_unstable();
         tags.dedup();
         let tags = tags;
-        dbg!(&tags);
 
         for tran in trans {
             let mut tag_i = 0;
             let target = tran.a.behind::<Finals>().evaluate(|var| {
                 let var = *var;
-                dbg!(var, tag_i);
                 if tag_i == tags.len() { return false; }
                 while tags[tag_i] < var {
-                    dbg!(tags[tag_i]);
                     tag_i += 1;
                     if tag_i == tags.len() { return false; }
                 }
-                if var == tags[tag_i] { tag_i += 1; dbg!(true); return true; }
+                if var == tags[tag_i] { tag_i += 1; return true; }
                 false
             });
             for right_state in target.0.a.as_ref() {

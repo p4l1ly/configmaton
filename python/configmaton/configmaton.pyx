@@ -3,6 +3,8 @@ from libc.stddef cimport size_t
 from cpython.ref cimport PyObject, Py_INCREF, Py_DECREF
 from configmaton cimport c_configmaton
 
+cdef size_t UNSIGNED_MAX = 2 * sys.maxsize + 1
+
 cdef class _Base:
     """Internal class for managing the lifetime of the Rust OwnedConfigmaton."""
     cdef c_configmaton.OwnedConfigmaton* _ptr
@@ -61,9 +63,9 @@ cdef class Configmaton:
         c_configmaton.configmaton_set(self._ptr, key, len(key), value, len(value))
         while True:
             cmd = c_configmaton.configmaton_pop_command(self._ptr)
-            if cmd.len == sys.maxsize:
-                return None
-            return bytes(cmd.data[:cmd.len])
+            if cmd.len == UNSIGNED_MAX:
+                return
+            self._handle_commands(bytes(cmd.data[:cmd.len]))
 
     def get(self, bytes key not None) -> Optional[bytes]:
         """Get a configuration value.
@@ -74,6 +76,6 @@ cdef class Configmaton:
         cdef c_configmaton.Bytestring result = c_configmaton.configmaton_get(
             self._ptr, key, len(key)
         )
-        if result.len == sys.maxsize:
+        if result.len == UNSIGNED_MAX:
             return None
         return bytes(result.data[:result.len])

@@ -400,21 +400,21 @@ impl Msg {
         };
     }
 
-    pub fn serialize<Cfg: U8BuildConfig>(parser: Parser, init: LeafOrigin, cfg: &Cfg) -> Msg {
+    pub fn serialize<Cfg: U8BuildConfig>(parser: &Parser, init: &LeafOrigin, cfg: &Cfg) -> Msg {
         let u8states = parser.nfa.states.iter()
             .map(|q| U8StatePrepared::prepare(q, cfg)).collect::<Vec<_>>();
         let mut sz = Reserve(0);
         let mut u8qs = Vec::<usize>::new();
         let mut kvqs = Vec::<usize>::new();
         let mut origin = (
-            init.get_olds,
+            &init.get_olds,
             (
-                init.exts,
+                &init.exts,
                 (
                     vec![0; init.states.len()],
                     (
-                        parser.states,
-                        u8states,
+                        &parser.states,
+                        &u8states,
                     )
                 )
             )
@@ -532,7 +532,7 @@ mod tests {
         let file = std::fs::File::create("/tmp/test_simple.dot").unwrap();
         parser.to_dot(&init, std::io::BufWriter::new(file));
 
-        let outmsg = Msg::serialize(parser, init, &TestU8BuildConfig);
+        let outmsg = Msg::serialize(&parser, &init, &TestU8BuildConfig);
         let inmsg = unsafe {
             Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.data_len()), outmsg.data_len()) };
         let aut = inmsg.get_automaton();
