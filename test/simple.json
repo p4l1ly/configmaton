@@ -1,0 +1,23 @@
+[
+    {
+        "when": {
+            "foo": "bar",
+            "qux": "a.*"
+        },
+        "run": [ "m1" ]
+    },
+    {
+        "when": { "foo": "baz" },
+        "run": [ "m2" ],
+        "then": [
+            {
+                "when": { "qux": "a.*" },
+                "run": [ "m3" ]
+            },
+            {
+                "when": { "qux": "ahoy" },
+                "run": [ "m4" ]
+            }
+        ]
+    }
+]

@@ -400,21 +400,21 @@ impl Msg {
         };
     }
 
-    pub fn serialize<Cfg: U8BuildConfig>(parser: Parser, init: LeafOrigin, cfg: &Cfg) -> Msg {
+    pub fn serialize<Cfg: U8BuildConfig>(parser: &Parser, init: &LeafOrigin, cfg: &Cfg) -> Msg {
         let u8states = parser.nfa.states.iter()
             .map(|q| U8StatePrepared::prepare(q, cfg)).collect::<Vec<_>>();
         let mut sz = Reserve(0);
         let mut u8qs = Vec::<usize>::new();
         let mut kvqs = Vec::<usize>::new();
         let mut origin = (
-            init.get_olds,
+            &init.get_olds,
             (
-                init.exts,
+                &init.exts,
                 (
                     vec![0; init.states.len()],
                     (
-                        parser.states,
-                        u8states,
+                        &parser.states,
+                        &u8states,
                     )
                 )
             )
