@@ -351,7 +351,7 @@ impl<'de> Deserialize<'de> for Cmd {
 
 
 pub struct Msg {
-    owner: Vec<u8>,
+    owner: Box<[u8]>,
     pub data: *const u8,
 }
 
@@ -364,7 +364,7 @@ impl Msg {
     }
 
     pub unsafe fn read<R: FnOnce(*mut u8)>(ext_read: R, len: usize) -> Msg {
-        let mut buff = vec![0; len + size_of::<usize>()];
+        let mut buff = vec![0; len + size_of::<usize>()].into_boxed_slice();
         let buf = align_up_mut_ptr::<u8, u128>(buff.as_mut_ptr()) as *mut u8;
         ext_read(buf);
         Msg::deserialize(buf);
@@ -442,7 +442,7 @@ impl Msg {
             *target = kvqs[*source];
         }
 
-        let mut buff = vec![0; sz.0 + size_of::<usize>()];
+        let mut buff = vec![0; sz.0 + size_of::<usize>()].into_boxed_slice();
         let buf = align_up_mut_ptr::<u8, u128>(buff.as_mut_ptr()) as *mut u8;
         let cur = BuildCursor::new(buf);
         let _: BuildCursor<()> = unsafe {

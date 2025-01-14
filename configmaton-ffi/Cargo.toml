@@ -1,0 +1,13 @@
+[package]
+name = "configmaton-ffi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+configmaton = { path = "../configmaton" }
+
+[build-dependencies]
+cbindgen = { version = "0.24" }

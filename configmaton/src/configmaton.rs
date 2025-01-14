@@ -1,22 +1,6 @@
-use blob::automaton::Automaton;
-use keyval_simulator::Simulation;
-use onion::{Locker, Onion};
-
-pub mod lock;
-pub mod command;
-pub mod commands;
-pub mod keyval_runner;
-pub mod keyval_simulator;
-pub mod guards;
-pub mod char_nfa;
-pub mod char_enfa;
-pub mod ast;
-pub mod keyval_nfa;
-pub mod char_runner;
-pub mod borrow_lock;
-pub mod blob;
-pub mod holder;
-pub mod onion;
+use crate::blob::automaton::Automaton;
+use crate::keyval_simulator::Simulation;
+use crate::onion::{Onion, Locker};
 
 pub struct Configmaton<'a, L: Locker> {
     onion: Onion<'a, L, Self>,
@@ -45,8 +29,8 @@ impl<'a, L: Locker> Configmaton<'a, L> {
         self.simulation.read(key, value, |key| { self.onion.get(key) });
     }
 
-    pub fn get(&self, key: &[u8]) {
-        self.onion.get(key);
+    pub fn get(&self, key: &[u8]) -> Option<&'a [u8]> {
+        self.onion.get(key)
     }
 
     pub fn pop_command(&mut self) -> Option<&'a [u8]> {
@@ -75,9 +59,10 @@ impl<'a, L: Locker> Configmaton<'a, L> {
 
 #[cfg(test)]
 mod tests {
-    use blob::tests::TestU8BuildConfig;
-    use keyval_nfa::{Cmd, Msg, Parser};
-    use onion::ThreadUnsafeLocker;
+    use crate::blob::tests::TestU8BuildConfig;
+    use crate::keyval_nfa::{Cmd, Msg, Parser};
+
+    use crate::onion::ThreadUnsafeLocker;
 
     use super::*;
 
@@ -132,9 +117,9 @@ mod tests {
         let inmsg = unsafe {
             Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.data_len()), outmsg.data_len()) };
         let aut = inmsg.get_automaton();
-        let mut cmds: Vec<&[u8]> = Vec::new();
-        let mut configmaton = Configmaton::new(aut);
+        let mut configmaton = Configmaton::<ThreadUnsafeLocker>::new(aut);
 
+        let mut cmds: Vec<&[u8]> = Vec::new();
         unsafe { configmaton.set_and_handle(b"qux", b"no!", &mut handle!(cmds, b"arrgh")) };
         assert!(cmds.is_empty());
 

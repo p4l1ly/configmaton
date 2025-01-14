@@ -1,0 +1,49 @@
+[package]
+name = "configmaton"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "configmaton"
+path = "src/lib.rs"
+
+[[bin]]
+name = "configmaton-server"
+path = "src/server.rs"
+required-features = ["server"]
+
+[features]
+default = []
+server = [
+    "dep:hyper",
+    "dep:tokio",
+    "dep:http-body-util",
+    "dep:hyper-util",
+    "dep:tokio-rusqlite",
+    "dep:rusqlite",
+    "dep:xxhash-rust",
+    "dep:url",
+]
+
+# Core dependencies (always needed)
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+hashbrown = "0.15.0"
+indexmap = "2.6.0"
+regex-syntax = "0.8.5"
+smallvec = "1.13.2"
+twox-hash = "2.0.0"
+
+# Server-only dependencies
+hyper = { version = "1", features = ["full"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+hyper-util = { version = "0.1", features = ["full"], optional = true }
+tokio-rusqlite = { version = "0.6", optional = true }
+rusqlite = { version = "0.32.1", optional = true }
+xxhash-rust = { version = "0.8", features = ["xxh64"], optional = true }
+url = { version = "2.4", optional = true }
+
+[package.metadata.docs.rs]
+features = ["server"]
