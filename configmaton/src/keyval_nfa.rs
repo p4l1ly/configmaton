@@ -285,6 +285,9 @@ impl<'de> Visitor<'de> for CmdVisitor {
         let mut when = None;
         let mut run: Option<Vec<String>> = None;
         let mut then = None;
+        let mut goto = None;
+        let mut label = None;
+        let mut body = None;
         while let Some(key) = map.next_key()? {
             match key {
                 "when" => {
@@ -328,15 +331,48 @@ impl<'de> Visitor<'de> for CmdVisitor {
                     }
                     then = Some(map.next_value()?);
                 }
+                "goto" => {
+                    if goto.is_some() {
+                        return Err(Error::duplicate_field("goto"));
+                    }
+                    goto = Some(map.next_value()?);
+                }
+                "label" => {
+                    if label.is_some() {
+                        return Err(Error::duplicate_field("label"));
+                    }
+                    label = Some(map.next_value()?);
+                }
+                "body" => {
+                    if body.is_some() {
+                        return Err(Error::duplicate_field("body"));
+                    }
+                    body = Some(map.next_value()?);
+                }
                 _ => {
-                    return Err(Error::unknown_field(key, &["when", "run", "then"]));
+                    return Err(
+                        Error::unknown_field(
+                            key, &["when", "run", "then", "label", "body", "goto"]
+                        )
+                    );
                 }
             }
         }
-        let when = when.ok_or_else(|| Error::missing_field("when"))?;
-        let run = run.unwrap_or_else(|| vec![]).into_iter().map(|s| s.into_bytes()).collect();
-        let then = then.unwrap_or_else(|| vec![]);
-        Ok(Cmd::Match(Match { when, run, then }))
+        match (when, goto, label) {
+            (Some(when), None, None) => {
+                let run = run.unwrap_or_else(|| vec![]).into_iter().map(|s| s.into_bytes()).collect();
+                let then = then.unwrap_or_else(|| vec![]);
+                Ok(Cmd::Match(Match { when, run, then }))
+            }
+            (None, Some(goto), None) => {
+                Ok(Cmd::Goto(goto))
+            }
+            (None, None, Some(label)) => {
+                let body = body.ok_or_else(|| Error::missing_field("body"))?;
+                Ok(Cmd::Label(label, body))
+            }
+            _ => Err(Error::custom("exactly one of when/label/goto expected"))
+        }
     }
 }
 
@@ -564,5 +600,29 @@ mod tests {
         // The output automaton is for now only for visual checking.
         let file = std::fs::File::create("/tmp/test_simplest.dot").unwrap();
         parser.to_dot(&init, std::io::BufWriter::new(file));
+    }
+
+    #[test]
+    fn goto() {
+        let _config: Vec<Cmd> = serde_json::from_str(r#"[
+            {
+                "when": { "foo": "baz" },
+                "then": [
+                    {
+                        "label": "hello",
+                        "body": [
+                            {
+                                "when": {},
+                                "run": [ "m1", "m2", "m3" ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "when": { "foo": "qux" },
+                "then": [{"goto": "hello"}]
+            }
+        ]"#).unwrap();
     }
 }
