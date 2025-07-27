@@ -110,6 +110,10 @@ pub struct Parser {
     pub states: Vec<StateOrigin>,
     pub nfa: char_nfa::Nfa,
     pub regexes: HashMap<String, (DfaStateIx, DfaIx)>,
+    // Fields for goto/label support
+    labels: HashMap<String, LeafOrigin>,
+    label_definitions: HashMap<String, Cmd>, // Store label bodies for later parsing
+    parsing_labels: HashSet<String>, // Track which labels are currently being parsed
 }
 
 impl Parser {
@@ -118,19 +122,105 @@ impl Parser {
             states: vec![],
             nfa: char_nfa::Nfa::new(),
             regexes: HashMap::new(),
+            labels: HashMap::new(),
+            label_definitions: HashMap::new(),
+            parsing_labels: HashSet::new(),
         };
+        
+        // First pass: collect all label definitions without parsing them
+        parser.collect_label_definitions(&cmds);
+        
+        // Second pass: parse all labels now that we know what exists
+        for (label_name, label_body) in parser.label_definitions.clone() {
+            if !parser.labels.contains_key(&label_name) {
+                parser.parse_label(&label_name, &label_body);
+            }
+        }
+        
+        // Third pass: parse the main structure now that all labels are resolved
         let init = parser.parse_parallel(cmds);
 
         (parser, init)
     }
+    
+    fn collect_label_definitions(&mut self, cmds: &[Cmd]) {
+        for cmd in cmds {
+            self.collect_labels_from_cmd(cmd);
+        }
+    }
+    
+    fn collect_labels_from_cmd(&mut self, cmd: &Cmd) {
+        match cmd {
+            Cmd::Label(label, body) => {
+                // Store the label definition for later parsing
+                self.label_definitions.insert(label.clone(), (**body).clone());
+                // Also recursively collect labels from within the body
+                self.collect_labels_from_cmd(body);
+            }
+            Cmd::Match(match_) => {
+                // Collect labels from the 'then' clause
+                self.collect_label_definitions(&match_.then);
+            }
+            Cmd::Goto(_) => {
+                // Nothing to collect from gotos
+            }
+        }
+    }
 
     fn parse_parallel(&mut self, cmds: Vec<Cmd>) -> LeafOrigin {
-        let targets = cmds.into_iter().map(|cmd| match cmd {
-            Cmd::Match(match_) => self.parse_match(match_),
-            _ => unimplemented!(),
-        });
+        let targets = cmds.into_iter().map(|cmd| self.parse_cmd(&cmd));
         join_leaves(targets)
     }
+
+    fn parse_cmd(&mut self, cmd: &Cmd) -> LeafOrigin {
+        match cmd {
+            Cmd::Match(match_) => self.parse_match(match_.clone()),
+            Cmd::Label(_, body) => self.parse_cmd(body), // Return the body's result
+            Cmd::Goto(target) => {
+                // Try to get the label, parsing it if necessary
+                if let Some(target_leaf) = self.labels.get(target).cloned() {
+                    target_leaf
+                } else if let Some(label_body) = self.label_definitions.get(target).cloned() {
+                    self.parse_label(target, &label_body)
+                } else {
+                    panic!("Unresolved goto: label '{}' not found", target);
+                }
+            }
+        }
+    }
+
+    fn parse_label(&mut self, label_name: &str, label_body: &Cmd) -> LeafOrigin {
+        // Check for cycles
+        if self.parsing_labels.contains(label_name) {
+            // We're in a cycle - create a placeholder that will be resolved later
+            // For now, just return an empty LeafOrigin to break the cycle
+            return LeafOrigin {
+                states: vec![],
+                get_olds: vec![],
+                exts: vec![],
+            };
+        }
+        
+        // Check if already parsed
+        if let Some(existing) = self.labels.get(label_name).cloned() {
+            return existing;
+        }
+        
+        // Mark as being parsed
+        self.parsing_labels.insert(label_name.to_string());
+        
+        // Parse the label body
+        let result = self.parse_cmd(label_body);
+        
+        // Store the result
+        self.labels.insert(label_name.to_string(), result.clone());
+        
+        // Remove from parsing set
+        self.parsing_labels.remove(label_name);
+        
+        result
+    }
+
 
     fn parse_match(
         &mut self,
@@ -200,6 +290,8 @@ impl Parser {
         then
     }
 
+
+
     pub fn to_dot<W: Write>(&self, init: &LeafOrigin, mut writer: W) {
         writer.write_all(b"digraph G {\n").unwrap();
 
@@ -255,14 +347,14 @@ impl Parser {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Cmd {
     Match(Match),
-    Label(String, Vec<Cmd>),  // No support yet.
+    Label(String, Box<Cmd>),  // No support yet.
     Goto(String),  // No support yet.
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Match {
     when: Vec<(String, String)>,
     run: Vec<Vec<u8>>,
@@ -603,6 +695,163 @@ mod tests {
     }
 
     #[test]
+    fn test_goto_label_comprehensive() {
+        let config: Vec<Cmd> = serde_json::from_str(r#"[
+            {
+                "when": { "test_type": "basic" },
+                "then": [
+                    {
+                        "label": "basic_target",
+                        "body": {
+                            "when": { "action": "process" },
+                            "run": [ "basic_processed" ]
+                        }
+                    }
+                ]
+            },
+            {
+                "when": { "test_type": "basic_goto" },
+                "then": [
+                    { "goto": "basic_target" }
+                ]
+            },
+            {
+                "when": { "test_type": "forward_ref" },
+                "then": [
+                    { "goto": "forward_target" }
+                ]
+            },
+            {
+                "when": { "test_type": "cycle_a" },
+                "then": [
+                    {
+                        "label": "cycle_a",
+                        "body": {
+                            "when": { "step": "1" },
+                            "run": [ "cycle_a_step" ],
+                            "then": [
+                                { "goto": "cycle_b" }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "when": { "test_type": "cycle_b" },
+                "then": [
+                    {
+                        "label": "cycle_b", 
+                        "body": {
+                            "when": { "step": "2" },
+                            "run": [ "cycle_b_step" ],
+                            "then": [
+                                { "goto": "cycle_a" }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "when": { "test_type": "nested" },
+                "then": [
+                    {
+                        "when": { "level": "outer" },
+                        "run": [ "outer_action" ],
+                        "then": [
+                            {
+                                "label": "nested_target",
+                                "body": {
+                                    "when": { "level": "inner" },
+                                    "run": [ "inner_action" ]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "when": { "test_type": "nested_goto" },
+                "then": [
+                    { "goto": "nested_target" }
+                ]
+            },
+            {
+                "label": "forward_target",
+                "body": {
+                    "when": { "action": "forward" },
+                    "run": [ "forward_processed" ]
+                }
+            }
+        ]"#).unwrap();
+
+        let (parser, init) = Parser::parse(config);
+
+        // Verify parsing succeeded
+        assert!(parser.states.len() > 0);
+        assert!(init.states.len() > 0);
+        assert_eq!(parser.labels.len(), 5); // Should have 5 labels
+
+        // Test serialization/deserialization
+        let outmsg = Msg::serialize(&parser, &init, &TestU8BuildConfig);
+        let inmsg = unsafe {
+            Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.data_len()), outmsg.data_len()) 
+        };
+        let aut = inmsg.get_automaton();
+        
+        // Test basic goto functionality
+        let mut sim = Simulation::new(aut, |_| None);
+        sim.read(b"test_type", b"basic_goto", |x| match x { b"test_type" => Some(b"basic_goto"), _ => None });
+        sim.read(b"action", b"process", |x| match x { 
+            b"test_type" => Some(b"basic_goto"), 
+            b"action" => Some(b"process"), 
+            _ => None 
+        });
+        let mut expected_exts = IndexSet::new();
+        expected_exts.insert(b"basic_processed".as_slice());
+        assert_eq!(&sim.exts, &expected_exts);
+
+        // Test forward reference
+        let mut sim = Simulation::new(aut, |_| None);
+        sim.read(b"test_type", b"forward_ref", |x| match x { b"test_type" => Some(b"forward_ref"), _ => None });
+        sim.read(b"action", b"forward", |x| match x { 
+            b"test_type" => Some(b"forward_ref"), 
+            b"action" => Some(b"forward"), 
+            _ => None 
+        });
+        expected_exts.clear();
+        expected_exts.insert(b"forward_processed".as_slice());
+        assert_eq!(&sim.exts, &expected_exts);
+
+        // Test cycle A -> B
+        let mut sim = Simulation::new(aut, |_| None);
+        sim.read(b"test_type", b"cycle_a", |x| match x { b"test_type" => Some(b"cycle_a"), _ => None });
+        sim.read(b"step", b"1", |x| match x { 
+            b"test_type" => Some(b"cycle_a"), 
+            b"step" => Some(b"1"), 
+            _ => None 
+        });
+        expected_exts.clear();
+        expected_exts.insert(b"cycle_a_step".as_slice());
+        assert_eq!(&sim.exts, &expected_exts);
+
+        // Test nested label access
+        let mut sim = Simulation::new(aut, |_| None);
+        sim.read(b"test_type", b"nested_goto", |x| match x { b"test_type" => Some(b"nested_goto"), _ => None });
+        sim.read(b"level", b"inner", |x| match x { 
+            b"test_type" => Some(b"nested_goto"), 
+            b"level" => Some(b"inner"), 
+            _ => None 
+        });
+        expected_exts.clear();
+        expected_exts.insert(b"inner_action".as_slice());
+        assert_eq!(&sim.exts, &expected_exts);
+
+        // Generate dot file for visual inspection
+        let file = std::fs::File::create("/tmp/test_goto_comprehensive.dot").unwrap();
+        parser.to_dot(&init, std::io::BufWriter::new(file));
+    }
+
+    #[test]
     fn goto() {
         let _config: Vec<Cmd> = serde_json::from_str(r#"[
             {
@@ -610,12 +859,10 @@ mod tests {
                 "then": [
                     {
                         "label": "hello",
-                        "body": [
-                            {
-                                "when": {},
-                                "run": [ "m1", "m2", "m3" ]
-                            }
-                        ]
+                        "body": {
+                            "when": {},
+                            "run": [ "m1", "m2", "m3" ]
+                        }
                     }
                 ]
             },

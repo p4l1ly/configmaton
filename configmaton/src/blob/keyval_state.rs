@@ -1,5 +1,6 @@
 use super::{bdd::{Bdd, BddOrigin}, list::List, sediment::Sediment, state::U8State, tupellum::Tupellum, vec::BlobVec, Build, BuildCursor, Reserve, Shifter, UnsafeIterator};
 
+#[derive(Clone, Debug)]
 pub struct LeafOrigin {
     pub states: Vec<usize>,
     pub get_olds: Vec<Vec<u8>>,
