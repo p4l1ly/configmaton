@@ -1,11 +1,38 @@
+//! Intrusive linked list with inline node storage.
+//!
+//! `List` stores elements as a linked list where each node contains:
+//! - A pointer to the next node
+//! - The value inline
+//!
+//! # Memory Layout
+//!
+//! ```text
+//! ┌──────┬───────┐    ┌──────┬───────┐    ┌──────┬───────┐
+//! │ next │ value │───▶│ next │ value │───▶│ null │ value │
+//! └──────┴───────┘    └──────┴───────┘    └──────┴───────┘
+//! ```
+//!
+//! This is useful when:
+//! - The number of elements is small
+//! - Elements have different sizes (via trait objects or enums)
+//! - Order matters but random access is not needed
+
 use std::marker::PhantomData;
 
 use super::{Build, BuildCursor, Reserve, Shifter, UnsafeIterator};
 
+/// An intrusive linked list node.
+///
+/// Each node contains a value inline and a pointer to the next node.
+/// The last node has a null `next` pointer.
 #[repr(C)]
 pub struct List<'a, X> {
+    /// Pointer to the next list node, or null if this is the last node.
     pub next: *const Self,
+
+    /// The value stored in this node.
     value: X,
+
     _phantom: PhantomData<&'a ()>,
 }
 

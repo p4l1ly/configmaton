@@ -1,9 +1,38 @@
+//! Packed array of variable-sized elements.
+//!
+//! `Sediment` stores elements sequentially without gaps, where each element
+//! can have a different size. This is useful for storing structures that
+//! internally have variable-sized components (like BlobVec or Lists).
+//!
+//! # Memory Layout
+//!
+//! ```text
+//! ┌─────┬───────────┬───────────────┬─────────┐
+//! │ len │  elem[0]  │   elem[1]     │ elem[2] │
+//! └─────┴───────────┴───────────────┴─────────┘
+//!        ← var size → ← var size →   ← var size →
+//! ```
+//!
+//! Unlike `BlobVec` where all elements have the same size, `Sediment` allows
+//! heterogeneous sizes. This is critical for structures like `U8State` arrays
+//! where each state may have different internal sizes.
+//!
+//! # Iteration
+//!
+//! Elements must be accessed sequentially via the `each()` method, which
+//! takes a closure that returns a pointer to the next element.
+
 use std::marker::PhantomData;
 
 use super::{get_behind_struct, Build, BuildCursor, Reserve};
 
+/// A packed array of variable-sized elements.
+///
+/// Each element is stored immediately after the previous one, with proper
+/// alignment. The size of each element may vary.
 #[repr(C)]
 pub struct Sediment<'a, X> {
+    /// Number of elements in the array.
     pub len: usize,
     _phantom: PhantomData<&'a X>,
 }

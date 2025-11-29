@@ -1,9 +1,41 @@
+//! Two-element tuple with sequential storage.
+//!
+//! `Tupellum` stores two values sequentially: the first inline, the second
+//! immediately after (with proper alignment).
+//!
+//! # Memory Layout
+//!
+//! ```text
+//! ┌─────────┬─────────┬─────────┐
+//! │    A    │ padding │    B    │
+//! └─────────┴─────────┴─────────┘
+//! ```
+//!
+//! This is useful for pairing data where you want both elements stored
+//! contiguously. For example:
+//! - Key and value in a hash table
+//! - Metadata and payload
+//! - Header and body
+//!
+//! # Example
+//!
+//! ```ignore
+//! // Store a count followed by an array of bytes
+//! type CountedBytes<'a> = Tupellum<'a, usize, BlobVec<'a, u8>>;
+//! ```
+
 use std::marker::PhantomData;
 
 use super::{Build, BuildCursor, Reserve};
 
+/// A two-element tuple with inline storage for both elements.
+///
+/// The first element (type `A`) is stored inline in the struct.
+/// The second element (type `B`) is stored immediately after `A`,
+/// properly aligned.
 #[repr(C)]
 pub struct Tupellum<'a, A, B> {
+    /// The first element, stored inline.
     pub a: A,
     _phantom: PhantomData<&'a B>,
 }

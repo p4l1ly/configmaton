@@ -1,3 +1,62 @@
+//! # Blob Serialization System
+//!
+//! A high-performance, zero-copy serialization framework for complex data structures.
+//! Similar in spirit to Cap'n Proto, but with more flexibility for direct memory layout control.
+//!
+//! ## Architecture
+//!
+//! The blob system provides three phases for each data structure:
+//!
+//! 1. **Reserve**: Calculate space requirements and determine layout
+//! 2. **Serialize**: Write data to buffer, converting from origin types to blob format
+//! 3. **Deserialize**: Fix up pointers in-place (convert offsets to absolute pointers)
+//!
+//! ## Key Features
+//!
+//! - **Zero-copy deserialization**: Pointers are fixed up in place, no data copying
+//! - **Custom layouts**: Full control over memory layout (arrays, linked lists, hashmaps, etc.)
+//! - **Type-safe cursors**: `BuildCursor<T>` provides type-safe buffer manipulation
+//! - **Alignment handling**: Automatic alignment for all types
+//! - **Flexible composition**: Structures can be nested arbitrarily
+//!
+//! ## Memory Safety
+//!
+//! This module uses extensive unsafe code for performance. The safety invariants are:
+//! - Buffers must be large enough (verified via Reserve phase)
+//! - Alignment requirements must be met (handled by BuildCursor)
+//! - Pointers are only valid within the same buffer
+//! - Lifetimes ensure buffer outlives all references
+//!
+//! ## Example Usage
+//!
+//! ```ignore
+//! // 1. Reserve phase: calculate size
+//! let origin = vec![1usize, 2, 3];
+//! let mut sz = Reserve(0);
+//! BlobVec::<usize>::reserve(&origin, &mut sz);
+//!
+//! // 2. Allocate buffer
+//! let mut buf = vec![0u8; sz.0];
+//!
+//! // 3. Serialize phase: write to buffer
+//! let mut cur = BuildCursor::new(buf.as_mut_ptr());
+//! cur = unsafe { BlobVec::<usize>::serialize(&origin, cur, |x, y| *y = *x) };
+//!
+//! // 4. Deserialize phase: fix up pointers
+//! let mut cur = BuildCursor::new(buf.as_mut_ptr());
+//! cur = unsafe { BlobVec::<usize>::deserialize(cur, |_| ()) };
+//!
+//! // 5. Use the deserialized structure
+//! let blobvec = unsafe { &*(buf.as_ptr() as *const BlobVec<usize>) };
+//! assert_eq!(unsafe { blobvec.as_ref() }, &[1, 2, 3]);
+//! ```
+//!
+//! ## Limitations
+//!
+//! - No endianness handling (only little-endian)
+//! - Pointers are platform-specific (not portable across architectures)
+//! - Requires unsafe code for usage
+
 // WARNING: No endianness handling is implemented yet, as we have no use case for BigEndian.
 
 use std::marker::PhantomData;
@@ -19,11 +78,19 @@ pub mod list;
 pub mod listmap;
 pub mod sediment;
 pub mod state;
+pub mod traits;
 pub mod tupellum;
 pub mod vec;
 pub mod vecmap;
 
+/// Trait for computing hash values compatible with blob hash maps.
+///
+/// This trait provides a simple hashing interface for keys in `BlobHashMap`.
+/// The hash value is used directly for bucket selection.
 pub trait MyHash {
+    /// Compute a hash value for this key.
+    ///
+    /// The hash should be well-distributed to minimize collisions.
     fn my_hash(&self) -> usize;
 }
 
@@ -39,10 +106,29 @@ impl MyHash for &[u8] {
     }
 }
 
+/// Trait for matching values during iteration over associative containers.
+///
+/// This trait allows flexible matching strategies:
+/// - Exact equality matching
+/// - Range matching (for guards)
+/// - Wildcard matching (match everything)
+///
+/// # Safety
+///
+/// Implementations must ensure the match predicate is consistent and doesn't
+/// access invalid memory.
 pub trait Matches<T> {
+    /// Check if this matcher matches the given value.
+    ///
+    /// # Safety
+    ///
+    /// The `other` reference must be valid and properly initialized.
     unsafe fn matches(&self, other: &T) -> bool;
 }
 
+/// Wrapper for equality-based matching.
+///
+/// This matcher uses `==` to check if values match.
 pub struct EqMatch<'a, X>(pub &'a X);
 
 impl<'a, X: Eq> Matches<X> for EqMatch<'a, X> {
@@ -63,6 +149,9 @@ impl<'a, 'b> Matches<BlobVec<'a, u8>> for &'b [u8] {
     }
 }
 
+/// Matcher that matches any value (wildcard).
+///
+/// Used when iterating over all elements in an associative container.
 pub struct AnyMatch;
 
 impl<T> Matches<T> for AnyMatch {
@@ -71,8 +160,28 @@ impl<T> Matches<T> for AnyMatch {
     }
 }
 
+/// Iterator trait for blob structures.
+///
+/// Unlike standard `Iterator`, this trait has an unsafe `next()` method because:
+/// - Iterators may access uninitialized or raw memory
+/// - References returned may have incorrect lifetimes if buffer is invalid
+/// - Used for performance-critical code where safety checks are externalized
+///
+/// # Safety
+///
+/// Callers must ensure:
+/// - The blob structure being iterated is properly initialized
+/// - The buffer containing the data remains valid for the lifetime 'a
+/// - No concurrent modifications to the buffer occur during iteration
 pub trait UnsafeIterator {
+    /// The type of elements yielded by this iterator.
     type Item;
+
+    /// Advance the iterator and return the next element.
+    ///
+    /// # Safety
+    ///
+    /// See trait-level safety documentation.
     unsafe fn next(&mut self) -> Option<Self::Item>;
 }
 
@@ -85,50 +194,154 @@ impl<T: UnsafeIterator> Iterator for FakeSafeIterator<T> {
     }
 }
 
+/// Align an offset up to the next alignment boundary.
+///
+/// # Example
+///
+/// ```ignore
+/// align_up(5, 4) == 8
+/// align_up(8, 4) == 8
+/// ```
 fn align_up(offset: usize, align: usize) -> usize {
     (offset + align - 1) & !(align - 1)
 }
 
+/// Align a mutable pointer up to the alignment of type B.
+///
+/// # Safety
+///
+/// The resulting pointer may point past the original allocation.
+/// Caller must ensure sufficient space is available.
 pub fn align_up_mut_ptr<A, B>(a: *mut A) -> *mut B {
     align_up(a as usize, align_of::<B>()) as *mut B
 }
 
+/// Align a const pointer up to the alignment of type B.
+///
+/// # Safety
+///
+/// The resulting pointer may point past the original allocation.
+/// Caller must ensure sufficient space is available.
 pub fn align_up_ptr<A, B>(a: *const A) -> *const B {
     align_up(a as usize, align_of::<B>()) as *const B
 }
 
+/// Get a pointer to the data immediately after a struct, with proper alignment.
+///
+/// This is commonly used to access inline data that follows a header structure.
+///
+/// # Safety
+///
+/// - `a` must point to a valid, initialized structure of type A
+/// - There must be valid data of type B after the structure
+/// - The alignment requirements of B must be satisfied
 pub unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
     align_up((a as *const u8).add(size_of::<A>()) as usize, align_of::<B>()) as *const B
 }
 
+/// Tracks the size and alignment requirements during the reserve phase.
+///
+/// This accumulator is used to calculate how much space a blob structure
+/// needs before serialization. It automatically handles alignment padding.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut sz = Reserve(0);
+/// sz.add::<u8>(5);      // Add 5 bytes
+/// sz.add::<u64>(2);     // Add 2×8 bytes, with alignment padding
+/// let total = sz.0;     // Get total size including padding
+/// ```
 pub struct Reserve(pub usize);
 
 impl Reserve {
+    /// Add space for `n` elements of type `T`, including alignment padding.
+    ///
+    /// This method:
+    /// 1. Aligns the current offset to T's alignment requirement
+    /// 2. Adds space for `n` instances of T
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut sz = Reserve(0);
+    /// sz.add::<u8>(3);      // offset = 3
+    /// sz.add::<u32>(1);     // offset = 4 (aligned) + 4 = 8
+    /// ```
     pub fn add<T>(&mut self, n: usize) {
         self.0 = align_up(self.0, align_of::<T>()) + size_of::<T>() * n;
     }
 }
 
+/// Type-safe cursor for building blob structures in a buffer.
+///
+/// `BuildCursor<A>` tracks:
+/// - Current offset in the buffer (`cur`)
+/// - Base pointer to the buffer (`buf`)
+/// - Expected type at current position (phantom `A`)
+///
+/// The type parameter `A` provides compile-time safety: methods ensure
+/// the cursor points to memory suitable for type `A`.
+///
+/// # Type Safety
+///
+/// Cursors can be transmuted to different types, but this is only safe
+/// if the new type's alignment and size requirements are compatible with
+/// the current buffer position.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut buf = vec![0u8; 100];
+/// let mut cur = BuildCursor::<MyStruct>::new(buf.as_mut_ptr());
+///
+/// // Write MyStruct at current position
+/// unsafe { *cur.get_mut() = MyStruct { ... }; }
+///
+/// // Move cursor to next structure
+/// cur = cur.behind::<NextStruct>(1);
+/// ```
 #[derive(Copy)]
 pub struct BuildCursor<A> {
+    /// Offset from the start of the buffer.
     pub cur: usize,
+
+    /// Base pointer to the buffer.
     pub buf: *mut u8,
+
     _phantom: PhantomData<A>,
 }
 
 impl<A> BuildCursor<A> {
+    /// Create a new cursor at the start of a buffer.
     pub fn new(buf: *mut u8) -> Self {
         Self { cur: 0, buf, _phantom: PhantomData }
     }
 
+    /// Create a cursor pointing to a specific location within the buffer.
+    ///
+    /// # Safety
+    ///
+    /// The pointer `at` must be within the same buffer as this cursor.
     pub fn goto<B>(&self, at: *mut B) -> BuildCursor<B> {
         BuildCursor { cur: at as usize - self.buf as usize, buf: self.buf, _phantom: PhantomData }
     }
 
+    /// Increment the cursor by one element of type A.
     pub fn inc(&mut self) {
         self.cur += size_of::<A>();
     }
 
+    /// Get a cursor positioned after `n` elements of type A, aligned for type B.
+    ///
+    /// This is used to access data that follows an array or structure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // After writing 3 u32s, get cursor for next f64
+    /// let next_cur = cur.behind::<f64>(3);
+    /// ```
     pub fn behind<B>(&self, n: usize) -> BuildCursor<B> {
         BuildCursor {
             cur: align_up(self.cur + size_of::<A>() * n, align_of::<B>()),
@@ -137,6 +350,9 @@ impl<A> BuildCursor<A> {
         }
     }
 
+    /// Align the cursor for type B without advancing past any data.
+    ///
+    /// Used when the current position needs to be aligned before writing.
     pub fn align<B>(&self) -> BuildCursor<B> {
         BuildCursor {
             cur: align_up(self.cur, align_of::<B>()),
@@ -145,10 +361,23 @@ impl<A> BuildCursor<A> {
         }
     }
 
+    /// Reinterpret the cursor as pointing to a different type.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that type B is compatible with the current
+    /// buffer position (alignment and initialization requirements).
     pub fn transmute<B>(&self) -> BuildCursor<B> {
         BuildCursor { cur: self.cur, buf: self.buf, _phantom: PhantomData }
     }
 
+    /// Get a mutable pointer to the current position.
+    ///
+    /// # Safety
+    ///
+    /// - The cursor must point to valid, allocated memory
+    /// - The memory must be properly aligned for type A
+    /// - Caller must ensure no aliasing violations
     pub unsafe fn get_mut(&self) -> *mut A {
         self.buf.add(self.cur) as *mut A
     }
@@ -160,27 +389,69 @@ impl<A> Clone for BuildCursor<A> {
     }
 }
 
+/// Helper for converting relative offsets to absolute pointers during deserialization.
+///
+/// During serialization, pointers are stored as offsets from the buffer start.
+/// During deserialization, `Shifter` converts these offsets back to absolute pointers.
+///
+/// # Example
+///
+/// ```ignore
+/// let shifter = Shifter(buf.as_ptr());
+/// // ptr currently contains offset 100
+/// shifter.shift(&mut ptr);  // Now ptr points to buf + 100
+/// ```
 pub struct Shifter(pub *const u8);
+
 impl Shifter {
+    /// Convert a pointer from relative offset to absolute address.
+    ///
+    /// # Safety
+    ///
+    /// - The pointer must currently contain a valid offset within the buffer
+    /// - The resulting absolute pointer must point to valid, initialized data
+    /// - This should only be called during the deserialize phase
     pub unsafe fn shift<T>(&self, x: &mut *const T) {
         *x = self.0.add(*x as *const u8 as usize) as *const T
     }
 }
 
+/// Super-trait for associative containers, defining associated types.
+///
+/// This trait is split from `Assocs` to work around Rust's trait system limitations
+/// with generic associated types (GATs).
 pub trait AssocsSuper<'a> {
+    /// The key type for this associative container.
     type Key: 'a;
+
+    /// The value type for this associative container.
     type Val: 'a;
+
+    /// The iterator type returned by `iter_matches`.
     type I<'b, X: 'b + Matches<Self::Key>>: UnsafeIterator<Item = (&'a Self::Key, &'a Self::Val)>
     where
         'a: 'b;
 }
 
+/// Trait for associative containers (maps) in blob format.
+///
+/// Associative containers support iteration over key-value pairs that match
+/// a given predicate. This allows both exact lookups and filtered iteration.
 pub trait Assocs<'a>: AssocsSuper<'a> {
+    /// Create an iterator over key-value pairs matching the given key predicate.
+    ///
+    /// # Safety
+    ///
+    /// The container must be properly initialized and the buffer must remain
+    /// valid for the lifetime 'a.
     unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
     where
         'a: 'b + 'c;
 }
 
+/// Trait for types that can be checked for emptiness.
+///
+/// Used during serialization to skip empty containers in hash maps.
 pub trait IsEmpty {
     fn is_empty(&self) -> bool;
 }
@@ -191,15 +462,48 @@ impl<X> IsEmpty for Vec<X> {
     }
 }
 
+/// Trait for single key-value associations.
+///
+/// Unlike `Assocs` which represents a collection, `Assoc` represents
+/// a single key-value pair (like `Flagellum`).
 pub trait Assoc<'a> {
+    /// The key type.
     type Key: 'a;
+
+    /// The value type.
     type Val: 'a;
 
+    /// Get a reference to the key.
+    ///
+    /// # Safety
+    ///
+    /// The structure must be properly initialized.
     unsafe fn key(&self) -> &'a Self::Key;
+
+    /// Get a reference to the value.
+    ///
+    /// # Safety
+    ///
+    /// The structure must be properly initialized.
     unsafe fn val(&self) -> &'a Self::Val;
 }
 
+/// Associates a blob type with its origin (source) type.
+///
+/// During serialization, we convert from `Origin` types (standard Rust types like Vec)
+/// to blob types (like BlobVec). The `Build` trait establishes this relationship.
+///
+/// # Example
+///
+/// ```ignore
+/// impl<'a, X: Build> Build for BlobVec<'a, X> {
+///     type Origin = Vec<X::Origin>;
+/// }
+/// ```
+///
+/// This means a `BlobVec<'a, u8>` is built from a `Vec<u8>`.
 pub trait Build {
+    /// The origin type that this blob type is built from.
     type Origin;
 }
 
