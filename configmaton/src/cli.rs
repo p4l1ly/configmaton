@@ -14,6 +14,9 @@ struct Args {
 
     #[clap(long)]
     dot: Option<String>,
+
+    #[clap(long)]
+    svg: Option<String>,
 }
 
 pub struct BuildConfig;
@@ -55,5 +58,31 @@ fn main() {
     if let Some(dot) = args.dot {
         let file = File::create(dot).unwrap();
         parser.to_dot(&init, file);
+    }
+
+    if let Some(svg) = args.svg {
+        use std::process::{Command, Stdio};
+
+        // Generate dot format and pipe to dot command
+        let mut dot_process = Command::new("dot")
+            .arg("-Tsvg")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn 'dot' command. Make sure graphviz is installed.");
+
+        {
+            let stdin = dot_process.stdin.as_mut().expect("Failed to open stdin");
+            parser.to_dot(&init, stdin);
+        }
+
+        let output = dot_process.wait_with_output().expect("Failed to read stdout");
+
+        if output.status.success() {
+            std::fs::write(svg, output.stdout).expect("Failed to write SVG file");
+        } else {
+            eprintln!("Error running dot command: {}", String::from_utf8_lossy(&output.stderr));
+            std::process::exit(1);
+        }
     }
 }

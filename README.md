@@ -49,19 +49,38 @@ The Python bindings work with pre-compiled binary automaton format:
 # Convert JSON to binary automaton
 ./target/release/configmaton-cli --output /tmp/simple.bin < python/tests/simple.json
 
-# Run Python test with binary automaton
+# Run Python tests
 cd python
-cat /tmp/simple.bin | uv run python tests/test_basic.py
+uv run pytest tests/ -v
 ```
 
 Expected output:
 ```
-m1
-LATER...
-m4
-m3
-m2
+6 passed in 0.02s
 ```
+
+### Visualizing Automata
+
+Visualize the state machine as SVG or DOT format:
+
+```bash
+# Generate SVG (requires graphviz installed)
+./target/release/configmaton-cli --svg automaton.svg < config.json
+
+# Or use the helper script
+./visualize.sh python/tests/simple.json
+./visualize.sh python/tests/kitchen.json
+
+# Generate DOT format
+./target/release/configmaton-cli --dot automaton.dot < config.json
+dot -Tsvg automaton.dot -o automaton.svg
+```
+
+The visualization shows:
+- State nodes (q0, q1, ...)
+- Transitions with key patterns
+- DFA states for regex matching
+- Commands to execute (in square/diamond nodes)
 
 ### Project Structure
 
