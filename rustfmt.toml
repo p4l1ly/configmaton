@@ -1,0 +1,5 @@
+# Rust formatting configuration
+# To match Python's Black config: 99 character line length
+
+max_width = 99
+use_small_heuristics = "Max"

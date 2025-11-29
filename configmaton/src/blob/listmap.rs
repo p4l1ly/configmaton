@@ -1,8 +1,7 @@
 use std::marker::PhantomData;
 
 use super::{
-    list::List, AssocsSuper, Build, BuildCursor, Matches, Reserve, Shifter,
-    UnsafeIterator, Assocs,
+    list::List, Assocs, AssocsSuper, Build, BuildCursor, Matches, Reserve, Shifter, UnsafeIterator,
 };
 
 #[repr(C)]
@@ -27,27 +26,33 @@ impl<'a, K: Build, V: Build> Build for ListMap<'a, K, V> {
 }
 
 impl<'a, K: Build, V: Build> ListMap<'a, K, V> {
-    pub fn reserve<
-        FK: FnMut(&K::Origin, &mut Reserve),
-        FV: FnMut(&V::Origin, &mut Reserve),
-    >
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut fk: FK, mut fv: FV) -> usize {
-        let my_addr = <ListMapList<'a, K, V>>::reserve(origin, sz,
-            |(k, _), sz| { sz.add::<ListMapItem<K, V>>(1); fk(k, sz) });
-        for (_, v) in origin.iter() { fv(v, sz); }
+    pub fn reserve<FK: FnMut(&K::Origin, &mut Reserve), FV: FnMut(&V::Origin, &mut Reserve)>(
+        origin: &<Self as Build>::Origin,
+        sz: &mut Reserve,
+        mut fk: FK,
+        mut fv: FV,
+    ) -> usize {
+        let my_addr = <ListMapList<'a, K, V>>::reserve(origin, sz, |(k, _), sz| {
+            sz.add::<ListMapItem<K, V>>(1);
+            fk(k, sz)
+        });
+        for (_, v) in origin.iter() {
+            fv(v, sz);
+        }
         sz.add::<V>(0);
         my_addr
     }
 
-    pub unsafe fn serialize
-    <
+    pub unsafe fn serialize<
         After,
         FK: FnMut(&K::Origin, BuildCursor<K>) -> BuildCursor<ListMapList<'a, K, V>>,
         FV: FnMut(&V::Origin, BuildCursor<V>) -> BuildCursor<V>,
-    >
-    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut fk: FK, mut fv: FV)
-    -> BuildCursor<After>
-    {
+    >(
+        origin: &<Self as Build>::Origin,
+        cur: BuildCursor<Self>,
+        mut fk: FK,
+        mut fv: FV,
+    ) -> BuildCursor<After> {
         let kcur = cur.behind::<ListMapList<'a, K, V>>(0);
         let mut item_curs = Vec::with_capacity(origin.len());
         let mut vcur = <ListMapList<'a, K, V>>::serialize(origin, kcur, |kv, item_cur| {
@@ -67,9 +72,11 @@ impl<'a, K, V> ListMap<'a, K, V> {
         After,
         FK: FnMut(BuildCursor<K>) -> BuildCursor<ListMapList<'a, K, V>>,
         FV: FnMut(BuildCursor<V>) -> BuildCursor<V>,
-    >
-    (cur: BuildCursor<Self>, mut fk: FK, mut fv: FV) -> BuildCursor<After>
-    {
+    >(
+        cur: BuildCursor<Self>,
+        mut fk: FK,
+        mut fv: FV,
+    ) -> BuildCursor<After> {
         let kcur = cur.behind::<ListMapList<'a, K, V>>(0);
         let mut len = 0;
         let shifter = Shifter(cur.buf);
@@ -78,7 +85,9 @@ impl<'a, K, V> ListMap<'a, K, V> {
             shifter.shift(&mut (*item_cur.get_mut()).val);
             fk(item_cur.transmute::<*const V>().behind(1))
         });
-        for _ in 0..len { vcur = fv(vcur); }
+        for _ in 0..len {
+            vcur = fv(vcur);
+        }
         vcur.align()
     }
 }
@@ -105,11 +114,17 @@ impl<'a, 'b, X: Matches<K>, K, V: 'a + 'b> UnsafeIterator for ListMapIter<'a, 'b
 impl<'a, K: 'a, V: 'a> AssocsSuper<'a> for ListMap<'a, K, V> {
     type Key = K;
     type Val = V;
-    type I<'b, X: 'b + Matches<K>> = ListMapIter<'a, 'b, X, K, V> where 'a: 'b;
+    type I<'b, X: 'b + Matches<K>>
+        = ListMapIter<'a, 'b, X, K, V>
+    where
+        'a: 'b;
 }
 
 impl<'a, K: 'a, V: 'a> Assocs<'a> for ListMap<'a, K, V> {
     unsafe fn iter_matches<'c, 'b, X: Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
-        where 'a: 'b + 'c
-    { ListMapIter { x: key, list_iter: &self.keys, _phantom: PhantomData } }
+    where
+        'a: 'b + 'c,
+    {
+        ListMapIter { x: key, list_iter: &self.keys, _phantom: PhantomData }
+    }
 }

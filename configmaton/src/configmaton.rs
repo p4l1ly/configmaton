@@ -1,6 +1,6 @@
 use crate::blob::automaton::Automaton;
 use crate::keyval_simulator::Simulation;
-use crate::onion::{Onion, Locker};
+use crate::onion::{Locker, Onion};
 
 pub struct Configmaton<'a, L: Locker> {
     onion: Onion<'a, L, Self>,
@@ -9,24 +9,18 @@ pub struct Configmaton<'a, L: Locker> {
 
 impl<'a, L: Locker> Configmaton<'a, L> {
     pub fn new(automaton: &Automaton<'a>) -> Self {
-        Configmaton {
-            onion: Onion::new(),
-            simulation: Simulation::new(automaton, |_| None),
-        }
+        Configmaton { onion: Onion::new(), simulation: Simulation::new(automaton, |_| None) }
     }
 
     // UNSAFE: make sure you don't use children after the parent is dropped.
     pub unsafe fn make_child(&mut self) -> *mut Self {
-        self.onion.make_child(|onion| Configmaton {
-            onion,
-            simulation: self.simulation.clone(),
-        })
+        self.onion.make_child(|onion| Configmaton { onion, simulation: self.simulation.clone() })
     }
 
     // UNSAFE: children's simulation is untouched but the onion gets updated.
     pub unsafe fn set(&mut self, key: &'a [u8], value: &'a [u8]) {
         self.onion.set(key, value);
-        self.simulation.read(key, value, |key| { self.onion.get(key) });
+        self.simulation.read(key, value, |key| self.onion.get(key));
     }
 
     pub fn get(&self, key: &[u8]) -> Option<&'a [u8]> {
@@ -44,9 +38,12 @@ impl<'a, L: Locker> Configmaton<'a, L> {
     }
 
     // UNSAFE: children's simulation is untouched but the onion gets updated.
-    pub unsafe fn set_and_handle<F: FnMut(&mut Self, &'a [u8])>
-        (&mut self, key: &'a [u8], value: &'a [u8], f: &mut F)
-    {
+    pub unsafe fn set_and_handle<F: FnMut(&mut Self, &'a [u8])>(
+        &mut self,
+        key: &'a [u8],
+        value: &'a [u8],
+        f: &mut F,
+    ) {
         self.set(key, value);
         self.handle_commands(f);
     }
@@ -73,8 +70,8 @@ mod tests {
                 match command {
                     b"m2" => {
                         configmaton.set(b"qux", $react);
-                    },
-                    _ => {},
+                    }
+                    _ => {}
                 }
             }
         };
@@ -83,7 +80,8 @@ mod tests {
     #[test]
     fn it_works() {
         // read and parse file tests/config.json
-        let config: Vec<Cmd> = serde_json::from_str(r#"[
+        let config: Vec<Cmd> = serde_json::from_str(
+            r#"[
             {
                 "when": {
                     "foo": "bar",
@@ -105,7 +103,9 @@ mod tests {
                     }
                 ]
             }
-        ]"#).unwrap();
+        ]"#,
+        )
+        .unwrap();
 
         let (parser, init) = Parser::parse(config);
 
@@ -115,7 +115,8 @@ mod tests {
 
         let outmsg = Msg::serialize(&parser, &init, &TestU8BuildConfig);
         let inmsg = unsafe {
-            Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.data_len()), outmsg.data_len()) };
+            Msg::read(|buf| buf.copy_from(outmsg.data, outmsg.data_len()), outmsg.data_len())
+        };
         let aut = inmsg.get_automaton();
         let mut configmaton = Configmaton::<ThreadUnsafeLocker>::new(aut);
 

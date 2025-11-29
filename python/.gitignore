@@ -33,22 +33,8 @@ env/
 
 # UV
 .uv/
-
-# Rust
-target/
-Cargo.lock
-**/*.rs.bk
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
+uv.lock
 
 # Build artifacts
 *.o
 *.a
-*.dylib
-*.dll

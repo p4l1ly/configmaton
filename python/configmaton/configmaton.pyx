@@ -23,7 +23,7 @@ cdef class Configmaton:
         """Create a new Configmaton instance.
 
         Args:
-            buf: Initial buffer containing automaton definition.
+            buf: Initial buffer containing serialized automaton (binary format).
 
         Returns:
             A new Configmaton instance.

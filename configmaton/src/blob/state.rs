@@ -1,9 +1,11 @@
 use std::mem::ManuallyDrop;
 
 use super::{
-    Build, BuildCursor, Reserve, Shifter, UnsafeIterator,
-    vec::{BlobVec, BlobVecIter}, vecmap::{VecMap, VecMapIter}, hashmap::BlobHashMap,
-    arrmap::ArrMap, Assocs as _
+    arrmap::ArrMap,
+    hashmap::BlobHashMap,
+    vec::{BlobVec, BlobVecIter},
+    vecmap::{VecMap, VecMapIter},
+    Assocs as _, Build, BuildCursor, Reserve, Shifter, UnsafeIterator,
 };
 use crate::guards::Guard;
 
@@ -45,25 +47,27 @@ impl<'a> Build for U8State<'a> {
 
 impl<'a> U8State<'a> {
     pub unsafe fn iter_matches<'c, 'b>(&'c self, key: &'b u8) -> U8StateIterator<'a, 'b>
-        where 'a: 'b + 'c
+    where
+        'a: 'b + 'c,
     {
         if self.sparse.is_dense {
             U8StateIterator::Dense(self.dense.trans.get(*key as usize).iter())
         } else {
             let sparse = &self.sparse;
-            U8StateIterator::Sparse(
-                U8SparseStateIterator {
-                    pattern_iter: sparse.pattern_trans.iter_matches(key),
-                    states_iter: None,
-                    explicit_trans: sparse.explicit_trans,
-                }
-            )
+            U8StateIterator::Sparse(U8SparseStateIterator {
+                pattern_iter: sparse.pattern_trans.iter_matches(key),
+                states_iter: None,
+                explicit_trans: sparse.explicit_trans,
+            })
         }
     }
 
     pub unsafe fn get_tags(&self) -> &[usize] {
-        if self.sparse.tags.is_null() { &[] }
-        else { (*self.sparse.tags).as_ref() }
+        if self.sparse.tags.is_null() {
+            &[]
+        } else {
+            (*self.sparse.tags).as_ref()
+        }
     }
 
     pub unsafe fn deserialize<B>(state_cur: BuildCursor<U8State>) -> BuildCursor<B> {
@@ -76,11 +80,12 @@ impl<'a> U8State<'a> {
         if state.sparse.is_dense {
             let dense = &mut state.dense;
             let f_trans_cur = f_tags_cur.behind::<U8ArrMap>(1);
-            let tags_cur: BuildCursor<u8> = U8ArrMap::deserialize(f_trans_cur,
-                |qs_cur| U8States::deserialize(qs_cur, shiftq));
+            let tags_cur: BuildCursor<u8> =
+                U8ArrMap::deserialize(f_trans_cur, |qs_cur| U8States::deserialize(qs_cur, shiftq));
 
-            if dense.tags.is_null() { tags_cur.align() }
-            else {
+            if dense.tags.is_null() {
+                tags_cur.align()
+            } else {
                 shifter.shift(&mut dense.tags);
                 U8Tags::deserialize(tags_cur.align(), |_| ())
             }
@@ -91,15 +96,22 @@ impl<'a> U8State<'a> {
             let f_explicit_trans_cur = f_tags_cur.behind::<*const U8ExplicitTrans>(1);
             let f_pattern_trans_cur = f_explicit_trans_cur.behind::<U8PatternTrans>(1);
             let exp_cur = U8PatternTrans::deserialize(
-                f_pattern_trans_cur, |_| (), |qs_cur| U8States::deserialize(qs_cur, shiftq));
-
-            let tags_cur: BuildCursor<u8> = U8ExplicitTrans::deserialize(exp_cur, |alist_cur|
-                U8AList::deserialize(alist_cur, |_| (),
-                    |qs_cur| U8States::deserialize(qs_cur, shiftq))
+                f_pattern_trans_cur,
+                |_| (),
+                |qs_cur| U8States::deserialize(qs_cur, shiftq),
             );
 
-            if sparse.tags.is_null() { tags_cur.align() }
-            else {
+            let tags_cur: BuildCursor<u8> = U8ExplicitTrans::deserialize(exp_cur, |alist_cur| {
+                U8AList::deserialize(
+                    alist_cur,
+                    |_| (),
+                    |qs_cur| U8States::deserialize(qs_cur, shiftq),
+                )
+            });
+
+            if sparse.tags.is_null() {
+                tags_cur.align()
+            } else {
                 shifter.shift(&mut sparse.tags);
                 U8Tags::deserialize(tags_cur.align(), |_| ())
             }
@@ -114,30 +126,42 @@ impl<'a> U8State<'a> {
         match origin {
             U8StatePrepared::Sparse(sparse) => {
                 sz.add::<*const U8ExplicitTrans>(1);
-                U8PatternTrans::reserve(&sparse.pattern_trans, sz,
-                    |qs, sz| { U8States::reserve(qs, sz); });
-                U8ExplicitTrans::reserve(&sparse.explicit_trans, sz, |alist, sz| {
-                    U8AList::reserve(alist, sz, |qs, sz| { U8States::reserve(qs, sz); });
+                U8PatternTrans::reserve(&sparse.pattern_trans, sz, |qs, sz| {
+                    U8States::reserve(qs, sz);
                 });
-                if !sparse.tags.is_empty() { U8Tags::reserve(&sparse.tags, sz); }
-            },
+                U8ExplicitTrans::reserve(&sparse.explicit_trans, sz, |alist, sz| {
+                    U8AList::reserve(alist, sz, |qs, sz| {
+                        U8States::reserve(qs, sz);
+                    });
+                });
+                if !sparse.tags.is_empty() {
+                    U8Tags::reserve(&sparse.tags, sz);
+                }
+            }
             U8StatePrepared::Dense(dense) => {
-                U8ArrMap::reserve(&dense.trans, sz, |qs, sz| { U8States::reserve(qs, sz); });
-                if !dense.tags.is_empty() { U8Tags::reserve(&dense.tags, sz); }
-            },
+                U8ArrMap::reserve(&dense.trans, sz, |qs, sz| {
+                    U8States::reserve(qs, sz);
+                });
+                if !dense.tags.is_empty() {
+                    U8Tags::reserve(&dense.tags, sz);
+                }
+            }
         }
 
         result
     }
 
-    pub unsafe fn serialize<After>
-    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, qptrs: &Vec<usize>)
-    -> BuildCursor<After>
-    {
+    pub unsafe fn serialize<After>(
+        origin: &<Self as Build>::Origin,
+        cur: BuildCursor<Self>,
+        qptrs: &Vec<usize>,
+    ) -> BuildCursor<After> {
         let state = &mut *cur.get_mut();
         let f_is_dense_cur = cur.transmute::<bool>();
         let f_tags_cur = f_is_dense_cur.behind::<*const U8Tags>(1);
-        let setq = |q: &usize, qref: &mut *const U8State| { *qref = qptrs[*q] as *const U8State; };
+        let setq = |q: &usize, qref: &mut *const U8State| {
+            *qref = qptrs[*q] as *const U8State;
+        };
 
         match origin {
             U8StatePrepared::Sparse(sparse_origin) => {
@@ -146,45 +170,58 @@ impl<'a> U8State<'a> {
                 let f_explicit_trans_cur = f_tags_cur.behind::<*const U8ExplicitTrans>(1);
                 let f_pattern_trans_cur = f_explicit_trans_cur.behind::<U8PatternTrans>(1);
                 let exp_cur = U8PatternTrans::serialize(
-                    &sparse_origin.pattern_trans, f_pattern_trans_cur,
-                    |guard, guardref| { *guardref = *guard; },
-                    |qs, qs_cur| { U8States::serialize(qs, qs_cur, setq) }
+                    &sparse_origin.pattern_trans,
+                    f_pattern_trans_cur,
+                    |guard, guardref| {
+                        *guardref = *guard;
+                    },
+                    |qs, qs_cur| U8States::serialize(qs, qs_cur, setq),
                 );
                 sparse.explicit_trans = exp_cur.cur as *const U8ExplicitTrans;
                 let tags_cur: BuildCursor<u8> = U8ExplicitTrans::serialize(
-                    &sparse_origin.explicit_trans, exp_cur, |alist, alist_cur| {
-                        U8AList::serialize(alist, alist_cur,
-                            |c, c_cur| { *c_cur = *c; },
-                            |qs, qs_cur| { U8States::serialize(qs, qs_cur, setq) },
+                    &sparse_origin.explicit_trans,
+                    exp_cur,
+                    |alist, alist_cur| {
+                        U8AList::serialize(
+                            alist,
+                            alist_cur,
+                            |c, c_cur| {
+                                *c_cur = *c;
+                            },
+                            |qs, qs_cur| U8States::serialize(qs, qs_cur, setq),
                         )
-                    }
+                    },
                 );
                 if sparse_origin.tags.is_empty() {
                     sparse.tags = std::ptr::null();
                     tags_cur.align()
-                }
-                else {
+                } else {
                     let tags_cur = tags_cur.align();
                     sparse.tags = tags_cur.cur as *const U8Tags;
-                    U8Tags::serialize(&sparse_origin.tags, tags_cur, |t, tref| { *tref = *t; })
+                    U8Tags::serialize(&sparse_origin.tags, tags_cur, |t, tref| {
+                        *tref = *t;
+                    })
                 }
-            },
+            }
             U8StatePrepared::Dense(dense_origin) => {
                 let dense = &mut state.dense;
                 dense.is_dense = true;
                 let f_trans_cur = f_tags_cur.behind::<U8ArrMap>(1);
-                let tags_cur: BuildCursor<u8> = U8ArrMap::serialize(
-                    &dense_origin.trans, f_trans_cur,
-                    |qs, qs_cur| U8States::serialize(qs, qs_cur, setq));
+                let tags_cur: BuildCursor<u8> =
+                    U8ArrMap::serialize(&dense_origin.trans, f_trans_cur, |qs, qs_cur| {
+                        U8States::serialize(qs, qs_cur, setq)
+                    });
                 if dense_origin.tags.is_empty() {
                     dense.tags = std::ptr::null();
                     tags_cur.align()
                 } else {
                     let tags_cur = tags_cur.align();
                     dense.tags = tags_cur.cur as *const U8Tags;
-                    U8Tags::serialize(&dense_origin.tags, tags_cur, |t, tref| { *tref = *t; })
+                    U8Tags::serialize(&dense_origin.tags, tags_cur, |t, tref| {
+                        *tref = *t;
+                    })
                 }
-            },
+            }
         }
     }
 }
@@ -202,7 +239,10 @@ pub enum U8StateIterator<'a, 'b> {
     Dense(U8DenseStateIterator<'a>),
 }
 
-impl<'a, 'b> UnsafeIterator for U8SparseStateIterator<'a, 'b> where 'a: 'b {
+impl<'a, 'b> UnsafeIterator for U8SparseStateIterator<'a, 'b>
+where
+    'a: 'b,
+{
     type Item = *const U8State<'a>;
 
     unsafe fn next(&mut self) -> Option<Self::Item> {
@@ -219,8 +259,9 @@ impl<'a, 'b> UnsafeIterator for U8SparseStateIterator<'a, 'b> where 'a: 'b {
                     return Some(*state);
                 }
             } else {
-                if self.explicit_trans.is_null() { return None; }
-                else {
+                if self.explicit_trans.is_null() {
+                    return None;
+                } else {
                     let explicit_trans = &*self.explicit_trans;
                     self.explicit_trans = std::ptr::null();
                     if let Some(states) = explicit_trans.get(self.pattern_iter.x) {
@@ -228,8 +269,12 @@ impl<'a, 'b> UnsafeIterator for U8SparseStateIterator<'a, 'b> where 'a: 'b {
                         if let Some(state) = states_iter.next() {
                             self.states_iter = Some(states_iter);
                             return Some(*state);
-                        } else { return None; }
-                    } else { return None; }
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
                 }
             }
         }
@@ -246,7 +291,7 @@ pub struct U8DenseStatePrepared {
 pub struct U8SparseStatePrepared {
     tags: Vec<usize>,
     pattern_trans: Vec<(Guard, Vec<usize>)>,
-    explicit_trans: Vec<Vec<(u8, Vec<usize>)>>,  // has size of 2**hashmap_cap
+    explicit_trans: Vec<Vec<(u8, Vec<usize>)>>, // has size of 2**hashmap_cap
 }
 
 #[derive(Debug)]
@@ -255,13 +300,12 @@ pub enum U8StatePrepared {
     Dense(U8DenseStatePrepared),
 }
 
-
 pub mod build {
     use std::array;
 
+    use super::*;
     use crate::char_nfa;
     use hashbrown::HashMap;
-    use super::*;
 
     pub trait U8BuildConfig {
         fn guard_size_keep(&self) -> u32;
@@ -289,14 +333,18 @@ pub mod build {
                             explicit_trans0.entry(c).or_insert(Vec::new()).push(*target);
                         }
                     }
-                    if c == 255 { break; }
+                    if c == 255 {
+                        break;
+                    }
                     c += 1;
                 }
                 let hashmap_cap_power = cfg.hashmap_cap_power_fn(explicit_trans0.len());
                 let hashmap_cap = 1 << hashmap_cap_power;
                 let hashmap_mask = hashmap_cap - 1;
                 let mut hashmap_alists = Vec::<Vec<(u8, Vec<usize>)>>::with_capacity(hashmap_cap);
-                for _ in 0..hashmap_cap { hashmap_alists.push(Vec::new()) }
+                for _ in 0..hashmap_cap {
+                    hashmap_alists.push(Vec::new())
+                }
                 for (c, targets) in explicit_trans0 {
                     hashmap_alists[c as usize & hashmap_mask].push((c, targets));
                 }
@@ -304,16 +352,20 @@ pub mod build {
                 Self::Sparse(U8SparseStatePrepared {
                     tags: old.tags.0.clone(),
                     pattern_trans: pattern_trans0.into_iter().collect(),
-                    explicit_trans: hashmap_alists
+                    explicit_trans: hashmap_alists,
                 })
             } else {
                 let mut trans = array::from_fn(|_| Vec::new());
                 let mut c = 0;
                 loop {
                     for (guard, target) in old.transitions.iter() {
-                        if guard.contains(c) { trans[c as usize].push(*target); }
+                        if guard.contains(c) {
+                            trans[c as usize].push(*target);
+                        }
                     }
-                    if c == 255 { break; }
+                    if c == 255 {
+                        break;
+                    }
                     c += 1;
                 }
                 Self::Dense(U8DenseStatePrepared { tags: old.tags.0.clone(), trans })

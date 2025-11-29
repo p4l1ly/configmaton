@@ -6,7 +6,7 @@ use super::guards::Monoid;
 #[derive(Debug)]
 pub struct State {
     pub transitions: Vec<((u8, u8), usize)>,
-    pub epsilon_transitions: Vec<usize>
+    pub epsilon_transitions: Vec<usize>,
 }
 
 impl State {
@@ -14,7 +14,6 @@ impl State {
         Self { transitions: Vec::new(), epsilon_transitions: Vec::new() }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OrderedIxs(pub Vec<usize>);
@@ -35,7 +34,9 @@ impl Monoid for OrderedIxs {
                 i += 1;
             } else {
                 result.push(other.0[j]);
-                if self.0[i] == other.0[j] { i += 1 }
+                if self.0[i] == other.0[j] {
+                    i += 1
+                }
                 j += 1;
             }
         }
@@ -44,7 +45,6 @@ impl Monoid for OrderedIxs {
         self.0 = result;
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cfg(pub OrderedIxs, pub bool);
@@ -67,9 +67,7 @@ pub struct Nfa {
 
 impl Nfa {
     pub fn from_ast(ast: Ast) -> Self {
-        let mut automaton = Self {
-            states: Vec::new(),
-        };
+        let mut automaton = Self { states: Vec::new() };
         automaton.states.push(State::new());
         automaton.states.push(State::new());
         automaton.recur_ast(ast, 0, 1);
@@ -129,8 +127,8 @@ impl Nfa {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::ast::parse_regex;
+    use super::*;
 
     #[test]
     fn test_nfa() {
@@ -141,12 +139,7 @@ mod tests {
         assert_eq!(nfa.states[0].transitions, vec![((b'a', b'a'), 3)]);
         assert_eq!(
             nfa.states[3].transitions,
-            vec![
-                ((b'b', b'b'), 3),
-                ((b'A', b'D'), 3),
-                ((b'c', b'c'), 3),
-                ((b'B', b'C'), 3),
-            ]
+            vec![((b'b', b'b'), 3), ((b'A', b'D'), 3), ((b'c', b'c'), 3), ((b'B', b'C'), 3),]
         );
         assert_eq!(nfa.states[3].epsilon_transitions, vec![2]);
         assert_eq!(nfa.states[2].transitions, vec![((b'd', b'd'), 1)]);

@@ -1,0 +1,63 @@
+[
+    {
+        "when": { "recipe": "tomato soup" },
+        "run": [
+             "amount tomato 5",
+             "amount onion 1",
+             "amount garlic 1 clove",
+             "amount salt 1 bit",
+             "amount pepper 3 corns",
+             "amount rapeseed oil 2 spoons",
+             "amount olive oil 1 spoon",
+             "amount vinegar 1 spoon",
+             "amount basil 10 leaves"
+        ]
+    },
+    {
+        "when": { "process": "dough" },
+        "then": [
+            { "when": { "recipe": "dumpling" }, "run": [ "set dough_type wet", "set flour_type 0", "set cereal wheat 100" ] },
+            { "when": { "recipe": "bread" }, "run": [ "set dough_type wet", "set flour_type 00", "set cereal wheat 80 rye 20" ] },
+            { "when": { "recipe": "pizza" }, "run": [ "set dough_type dry", "set flour_type 0", "set cereal wheat 100" ] },
+
+            {
+                "when": { "dough_type": "wet" },
+                "run": [ "amount water 100 ml" ],
+                "then": [
+                    {
+                        "when": { "step": "starter" },
+                        "run": [ "amount flour 100 g" ]
+                    },
+                    {
+                        "when": { "step": "knead" },
+                        "run": [ "amount flour 100 g" ]
+                    }
+                ]
+            },
+            {
+                "when": { "dough_type": "dry" },
+                "run": [ "amount water 50 ml" ],
+                "then": [
+                    {
+                        "when": { "step": "starter" },
+                        "run": [ "amount flour 50 g" ]
+                    },
+                    {
+                        "when": { "step": "knead" },
+                        "run": [ "amount flour 350 g" ]
+                    }
+                ]
+            },
+        ]
+    }
+    {
+        "when": { "recipe": "pizza" },
+        "run": [
+            "amount sugo 100 ml",
+            "amount mozzarella 100 g",
+            "amount basil 10 leaves",
+            "set bake_temperature 200",
+            "set bake_time 10 minutes"
+        ]
+    }
+]

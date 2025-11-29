@@ -1,5 +1,5 @@
 use hashbrown::HashMap;
-use indexmap::IndexSet;  // we use IndexSet for faster worst-case iteration
+use indexmap::IndexSet; // we use IndexSet for faster worst-case iteration
 
 use crate::blob::keyval_state::{Finals, KeyValState, LeafMeta};
 use crate::blob::sediment::Sediment;
@@ -13,20 +13,26 @@ pub struct Runner<'a> {
     pub sparse: HashMap<&'a [u8], IndexSet<*const KeyValState<'a>>>,
 }
 
-impl<'a> Runner<'a>
-{
+impl<'a> Runner<'a> {
     // Initialize the state of the automaton.
     pub unsafe fn new<'b, I: IntoIterator<Item = &'b KeyValState<'a>>>(initial_states: I) -> Self
-        where 'a: 'b
+    where
+        'a: 'b,
     {
-        let mut result = Runner{ sparse: HashMap::new() };
-        for any_state_lock in initial_states { result.add_right_state(any_state_lock); }
+        let mut result = Runner { sparse: HashMap::new() };
+        for any_state_lock in initial_states {
+            result.add_right_state(any_state_lock);
+        }
         result
     }
 
     // Read a symbol, perform transitions.
     pub unsafe fn read<GetOld: FnMut(&'a [u8]), RunExt: FnMut(&'a [u8])>(
-        &mut self, sym: &[u8], value: &[u8], mut get_old: GetOld, mut run_ext: RunExt
+        &mut self,
+        sym: &[u8],
+        value: &[u8],
+        mut get_old: GetOld,
+        mut run_ext: RunExt,
     ) {
         let mut trans = vec![];
 
@@ -50,14 +56,16 @@ impl<'a> Runner<'a>
                         }
                     }
                 }
-            },
+            }
         }
 
         let mut crunner = char_runner::Runner::new(
-            trans.iter().flat_map(|tran| FakeSafeIterator(tran.a.iter())).copied()
+            trans.iter().flat_map(|tran| FakeSafeIterator(tran.a.iter())).copied(),
         );
 
-        for c in value { crunner.read(*c); }
+        for c in value {
+            crunner.read(*c);
+        }
 
         let mut tags = crunner.get_tags().collect::<Vec<_>>();
         tags.sort_unstable();
@@ -68,12 +76,19 @@ impl<'a> Runner<'a>
             let mut tag_i = 0;
             let target = tran.a.behind::<Finals>().evaluate(|var| {
                 let var = *var;
-                if tag_i == tags.len() { return false; }
+                if tag_i == tags.len() {
+                    return false;
+                }
                 while tags[tag_i] < var {
                     tag_i += 1;
-                    if tag_i == tags.len() { return false; }
+                    if tag_i == tags.len() {
+                        return false;
+                    }
                 }
-                if var == tags[tag_i] { tag_i += 1; return true; }
+                if var == tags[tag_i] {
+                    tag_i += 1;
+                    return true;
+                }
                 false
             });
             for right_state in target.0.a.as_ref() {

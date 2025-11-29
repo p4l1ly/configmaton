@@ -1,11 +1,10 @@
 use std::collections::VecDeque;
 
-use hashbrown::{HashMap, hash_map::Entry};
+use hashbrown::{hash_map::Entry, HashMap};
 
+use super::char_enfa::{Cfg, Nfa as Enfa, OrderedIxs};
 use super::guards;
 use super::guards::{Guard, Monoid};
-use super::char_enfa::{Cfg, Nfa as Enfa, OrderedIxs};
-
 
 pub struct State {
     pub transitions: Vec<(Guard, usize)>,
@@ -37,13 +36,11 @@ impl Nfa {
         reachable_configurations.insert(q.clone(), qix);
         let Cfg(enfa_config, is_final) = q;
 
-        self.states.push(
-            State {
-                transitions: vec![],
-                tags: OrderedIxs(if is_final { vec![tag] } else { vec![] }),
-                is_deterministic: false,
-            },
-        );
+        self.states.push(State {
+            transitions: vec![],
+            tags: OrderedIxs(if is_final { vec![tag] } else { vec![] }),
+            is_deterministic: false,
+        });
 
         frontier.push((enfa_config, qix));
 
@@ -71,17 +68,18 @@ impl Nfa {
             // 5. put the newly-created ones to the frontier, together with their state index.
 
             for (cfgsuc, guard) in cfgsuc_to_guard {
-                let new_state_ix = *reachable_configurations.entry(cfgsuc.clone()).or_insert_with(|| {
-                    let is_final = cfgsuc.1;
-                    let new_state_ix = self.states.len();
-                    self.states.push(State {
-                        transitions: vec![],
-                        tags: OrderedIxs(if is_final { vec![tag] } else { vec![] }),
-                        is_deterministic: false,
+                let new_state_ix =
+                    *reachable_configurations.entry(cfgsuc.clone()).or_insert_with(|| {
+                        let is_final = cfgsuc.1;
+                        let new_state_ix = self.states.len();
+                        self.states.push(State {
+                            transitions: vec![],
+                            tags: OrderedIxs(if is_final { vec![tag] } else { vec![] }),
+                            is_deterministic: false,
+                        });
+                        frontier.push((cfgsuc.0, new_state_ix));
+                        new_state_ix
                     });
-                    frontier.push((cfgsuc.0, new_state_ix));
-                    new_state_ix
-                });
                 self.states[state_ix].transitions.push((guard, new_state_ix));
             }
         }
@@ -96,12 +94,15 @@ impl Nfa {
     ) {
         match visited_states.entry(suc_ix) {
             Entry::Vacant(entry) => {
-                if states_len < stop_size { frontier.push_back(suc_ix); }
+                if states_len < stop_size {
+                    frontier.push_back(suc_ix);
+                }
                 entry.insert(stop_size);
-            },
+            }
             Entry::Occupied(entry) => {
-                if *entry.get() < stop_size && states_len < stop_size
-                    { frontier.push_back(suc_ix); }
+                if *entry.get() < stop_size && states_len < stop_size {
+                    frontier.push_back(suc_ix);
+                }
             }
         }
     }
@@ -111,30 +112,37 @@ impl Nfa {
         cfg: &OrderedIxs,
         frontier: &mut VecDeque<usize>,
         stop_size: usize,
-    ) -> usize
-    {
+    ) -> usize {
         if cfg.0.len() == 1 {
             let suc_ix = cfg.0[0];
             Self::continue_to_state(
-                suc_ix, &mut self.visited_states, self.states.len(), frontier, stop_size);
+                suc_ix,
+                &mut self.visited_states,
+                self.states.len(),
+                frontier,
+                stop_size,
+            );
             suc_ix
         } else {
-            let (suc_ix, stop_size0) = *self.configurations_to_states.entry(cfg.clone())
-                .or_insert_with(|| {
-                let mut tags = OrderedIxs(vec![]);
-                let mut transitions = vec![];
-                for suc_ix in cfg.0.iter() {
-                    let state = &self.states[*suc_ix];
-                    tags.append(&state.tags);
-                    transitions.extend(&state.transitions);
-                }
-                let suc_ix = self.states.len();
-                self.states.push(State { transitions, tags, is_deterministic: false });
-                if self.states.len() < stop_size { frontier.push_back(suc_ix); }
-                (suc_ix, stop_size)
-            });
-            if stop_size0 < stop_size && self.states.len() < stop_size
-                { frontier.push_back(suc_ix); }
+            let (suc_ix, stop_size0) =
+                *self.configurations_to_states.entry(cfg.clone()).or_insert_with(|| {
+                    let mut tags = OrderedIxs(vec![]);
+                    let mut transitions = vec![];
+                    for suc_ix in cfg.0.iter() {
+                        let state = &self.states[*suc_ix];
+                        tags.append(&state.tags);
+                        transitions.extend(&state.transitions);
+                    }
+                    let suc_ix = self.states.len();
+                    self.states.push(State { transitions, tags, is_deterministic: false });
+                    if self.states.len() < stop_size {
+                        frontier.push_back(suc_ix);
+                    }
+                    (suc_ix, stop_size)
+                });
+            if stop_size0 < stop_size && self.states.len() < stop_size {
+                frontier.push_back(suc_ix);
+            }
             suc_ix
         }
     }
@@ -154,9 +162,14 @@ impl Nfa {
                 // Only continue the determinization with its successors.
                 for (_guard, suc) in pre.transitions.iter() {
                     Self::continue_to_state(
-                        *suc, &mut self.visited_states, states_len, &mut frontier, stop_size);
+                        *suc,
+                        &mut self.visited_states,
+                        states_len,
+                        &mut frontier,
+                        stop_size,
+                    );
                 }
-                continue
+                continue;
             }
             pre.is_deterministic = true;
 
@@ -179,8 +192,10 @@ impl Nfa {
 
             let mut cfgsuc_to_guard: HashMap<OrderedIxs, Guard> = HashMap::new();
             for (suc, guard) in suc_to_guard {
-                cfgsuc_to_guard.entry(OrderedIxs(vec![suc]))
-                    .or_insert(Guard::empty()).union_update(&guard);
+                cfgsuc_to_guard
+                    .entry(OrderedIxs(vec![suc]))
+                    .or_insert(Guard::empty())
+                    .union_update(&guard);
             }
 
             let mut len_before = cfgsuc_to_guard.len();
@@ -194,7 +209,9 @@ impl Nfa {
                     cfgsuc_to_guard.entry(cfgsuc).or_insert(Guard::empty()).union_update(&guard);
                 }
 
-                if cfgsuc_to_guard.len() == len_before { break; }
+                if cfgsuc_to_guard.len() == len_before {
+                    break;
+                }
                 len_before = cfgsuc_to_guard.len();
             }
 
@@ -214,7 +231,9 @@ impl Nfa {
                     guard_to_cfgsuc.entry(guard).or_insert(Monoid::empty()).append(&cfgsuc);
                 }
 
-                if guard_to_cfgsuc.len() == len_before { break; }
+                if guard_to_cfgsuc.len() == len_before {
+                    break;
+                }
                 len_before = guard_to_cfgsuc.len();
             }
 
@@ -234,8 +253,8 @@ impl Nfa {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::ast::parse_regex;
+    use super::*;
 
     #[test]
     fn dfa_works() {
@@ -253,10 +272,11 @@ mod tests {
         }
 
         assert_eq!(dfa.states[0].transitions.len(), 2);
-        assert_eq!(dfa.states[0].transitions[0].0,
-            Guard::from_ranges(vec![(b'a', b'a')]));
-        assert_eq!(dfa.states[0].transitions[1].0,
-            Guard::from_ranges(vec![(0, b'a' - 1), (b'a' + 1, 255)]));
+        assert_eq!(dfa.states[0].transitions[0].0, Guard::from_ranges(vec![(b'a', b'a')]));
+        assert_eq!(
+            dfa.states[0].transitions[1].0,
+            Guard::from_ranges(vec![(0, b'a' - 1), (b'a' + 1, 255)])
+        );
 
         let qsink = dfa.states[0].transitions[1].1;
         let q2 = dfa.states[0].transitions[0].1;
@@ -266,13 +286,18 @@ mod tests {
 
         assert_eq!(dfa.states[q2].tags, qnonfinal);
         assert_eq!(dfa.states[q2].transitions.len(), 3);
-        assert_eq!(dfa.states[q2].transitions[0],
-            (Guard::from_ranges(vec![(b'A', b'D'), (b'b', b'c')]), q2));
-        assert_eq!(dfa.states[q2].transitions[1].0,
-            Guard::from_ranges(vec![(b'd', b'd')]));
-        assert_eq!(dfa.states[q2].transitions[2],
-            (Guard::from_ranges(vec![(0, b'A' - 1), (b'D' + 1, b'b' - 1), (b'd' + 1, 255)]),
-                qsink));
+        assert_eq!(
+            dfa.states[q2].transitions[0],
+            (Guard::from_ranges(vec![(b'A', b'D'), (b'b', b'c')]), q2)
+        );
+        assert_eq!(dfa.states[q2].transitions[1].0, Guard::from_ranges(vec![(b'd', b'd')]));
+        assert_eq!(
+            dfa.states[q2].transitions[2],
+            (
+                Guard::from_ranges(vec![(0, b'A' - 1), (b'D' + 1, b'b' - 1), (b'd' + 1, 255)]),
+                qsink
+            )
+        );
 
         let qf = dfa.states[q2].transitions[1].1;
         assert_eq!(dfa.states[qf].tags, qfinal);

@@ -600,7 +600,8 @@ impl Guard {
     }
 
     pub fn add_range(&mut self, new_range: (u8, u8)) {
-        *self = self.union(&BOTTOMS[new_range.0 as usize].intersection(&TOPS[new_range.1 as usize]));
+        *self =
+            self.union(&BOTTOMS[new_range.0 as usize].intersection(&TOPS[new_range.1 as usize]));
     }
 
     pub fn from_ranges(ranges: Vec<(u8, u8)>) -> Self {
@@ -639,9 +640,9 @@ impl Guard {
         *self = Guard(self.0 | right.0, self.1 | right.1)
     }
 
-    pub fn mintermize<Out: Monoid + Clone, I: Iterator<Item = (Out, Self)>>
-        (input_map: I) -> HashMap<Self, Out>
-    {
+    pub fn mintermize<Out: Monoid + Clone, I: Iterator<Item = (Out, Self)>>(
+        input_map: I,
+    ) -> HashMap<Self, Out> {
         let mut leaves = HashMap::new();
         leaves.insert(Guard::full(), Out::empty()); // Global guard with no outputs
 
@@ -670,8 +671,6 @@ impl Guard {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,23 +686,58 @@ mod tests {
         let right_out = Guard::from_ranges(vec![(34, 36), (100, 110)]);
         let right_all = Guard::from_ranges(vec![(0, 90)]);
         let right_in = Guard::from_ranges(vec![(5, 6)]);
-        assert_eq!(left.intersection(&right), Guard::from_ranges(vec![(5, 10), (25, 30), (40, 45)]));
-        assert_eq!(left.intersection(&right2), Guard::from_ranges(vec![(5, 10), (20, 30), (40, 45)]));
-        assert_eq!(left.intersection(&right3), Guard::from_ranges(vec![(5, 7), (9, 10), (20, 30), (40, 45)]));
+        assert_eq!(
+            left.intersection(&right),
+            Guard::from_ranges(vec![(5, 10), (25, 30), (40, 45)])
+        );
+        assert_eq!(
+            left.intersection(&right2),
+            Guard::from_ranges(vec![(5, 10), (20, 30), (40, 45)])
+        );
+        assert_eq!(
+            left.intersection(&right3),
+            Guard::from_ranges(vec![(5, 7), (9, 10), (20, 30), (40, 45)])
+        );
         assert_eq!(left.intersection(&right_out), Guard::from_ranges(vec![]));
         assert_eq!(left.intersection(&right_all), left);
         assert_eq!(left.intersection(&right_in), Guard::from_ranges(vec![(5, 6)]));
-        assert_eq!(left.subtract(&right), Guard::from_ranges(vec![(0, 0), (3, 4), (20, 24), (46, 50), (80, 90)]));
-        assert_eq!(left.subtract(&right2), Guard::from_ranges(vec![(0, 0), (3, 4), (46, 50), (80, 90)]));
-        assert_eq!(left.subtract(&right3), Guard::from_ranges(vec![(0, 0), (3, 4), (8, 8), (46, 50), (80, 90)]));
+        assert_eq!(
+            left.subtract(&right),
+            Guard::from_ranges(vec![(0, 0), (3, 4), (20, 24), (46, 50), (80, 90)])
+        );
+        assert_eq!(
+            left.subtract(&right2),
+            Guard::from_ranges(vec![(0, 0), (3, 4), (46, 50), (80, 90)])
+        );
+        assert_eq!(
+            left.subtract(&right3),
+            Guard::from_ranges(vec![(0, 0), (3, 4), (8, 8), (46, 50), (80, 90)])
+        );
         assert_eq!(left.subtract(&right_out), left);
         assert_eq!(left.subtract(&right_all), Guard::from_ranges(vec![]));
-        assert_eq!(left.union(&right), Guard::from_ranges(vec![(0, 0), (3, 15), (20, 50), (60, 70), (80, 90)]));
-        assert_eq!(left.union(&right2), Guard::from_ranges(vec![(0, 0), (3, 15), (18, 50), (80, 90), (100, 110)]));
-        assert_eq!(left.union(&right3), Guard::from_ranges(vec![(0, 0), (3, 50), (80, 90), (100, 110)]));
+        assert_eq!(
+            left.union(&right),
+            Guard::from_ranges(vec![(0, 0), (3, 15), (20, 50), (60, 70), (80, 90)])
+        );
+        assert_eq!(
+            left.union(&right2),
+            Guard::from_ranges(vec![(0, 0), (3, 15), (18, 50), (80, 90), (100, 110)])
+        );
+        assert_eq!(
+            left.union(&right3),
+            Guard::from_ranges(vec![(0, 0), (3, 50), (80, 90), (100, 110)])
+        );
         assert_eq!(
             left.union(&right_out),
-            Guard::from_ranges(vec![(0, 0), (3, 10), (20, 30), (34, 36), (40, 50), (80, 90), (100, 110)])
+            Guard::from_ranges(vec![
+                (0, 0),
+                (3, 10),
+                (20, 30),
+                (34, 36),
+                (40, 50),
+                (80, 90),
+                (100, 110)
+            ])
         );
         assert_eq!(left.union(&right_all), Guard::from_ranges(vec![(0, 90)]));
 
@@ -729,10 +763,19 @@ mod tests {
     #[test]
     fn test_mintermize() {
         let input_map = vec![
-            (vec![1].into_iter().collect(), Guard::from_ranges(vec![(0, 0), (3, 10), (20, 30), (40, 50), (80, 90)])),
+            (
+                vec![1].into_iter().collect(),
+                Guard::from_ranges(vec![(0, 0), (3, 10), (20, 30), (40, 50), (80, 90)]),
+            ),
             (vec![2].into_iter().collect(), Guard::from_ranges(vec![(5, 15), (25, 45), (60, 70)])),
-            (vec![3].into_iter().collect(), Guard::from_ranges(vec![(5, 15), (18, 45), (100, 110)])),
-            (vec![4, 5].into_iter().collect(), Guard::from_ranges(vec![(5, 7), (9, 45), (100, 110)])),
+            (
+                vec![3].into_iter().collect(),
+                Guard::from_ranges(vec![(5, 15), (18, 45), (100, 110)]),
+            ),
+            (
+                vec![4, 5].into_iter().collect(),
+                Guard::from_ranges(vec![(5, 7), (9, 45), (100, 110)]),
+            ),
         ];
 
         let result = Guard::mintermize(input_map.into_iter());
@@ -761,8 +804,10 @@ mod tests {
         expected.insert(vec![(20, 24)], vec![1, 3, 4, 5]);
         expected.insert(vec![(5, 7), (9, 10), (25, 30), (40, 45)], vec![1, 2, 3, 4, 5]);
 
-        let expected = expected.into_iter()
-            .map(|(k, v)| (Guard::from_ranges(k), v.into_iter().collect::<HashSet<_>>())).collect();
+        let expected = expected
+            .into_iter()
+            .map(|(k, v)| (Guard::from_ranges(k), v.into_iter().collect::<HashSet<_>>()))
+            .collect();
         assert_eq!(result, expected);
     }
 

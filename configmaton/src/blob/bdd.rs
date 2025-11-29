@@ -6,26 +6,10 @@ use super::{get_behind_struct, Build, BuildCursor, Reserve, Shifter};
 
 pub enum BddOrigin<Var, Leaf> {
     Leaf(Leaf),
-    NodeNoOwned {
-        var: Var,
-        pos: *const BddOrigin<Var, Leaf>,
-        neg: *const BddOrigin<Var, Leaf>,
-    },
-    NodePosOwned {
-        var: Var,
-        pos: Box<BddOrigin<Var, Leaf>>,
-        neg: *const BddOrigin<Var, Leaf>,
-    },
-    NodeNegOwned {
-        var: Var,
-        pos: *const BddOrigin<Var, Leaf>,
-        neg: Box<BddOrigin<Var, Leaf>>,
-    },
-    NodeBothOwned {
-        var: Var,
-        pos: Box<BddOrigin<Var, Leaf>>,
-        neg: Box<BddOrigin<Var, Leaf>>,
-    },
+    NodeNoOwned { var: Var, pos: *const BddOrigin<Var, Leaf>, neg: *const BddOrigin<Var, Leaf> },
+    NodePosOwned { var: Var, pos: Box<BddOrigin<Var, Leaf>>, neg: *const BddOrigin<Var, Leaf> },
+    NodeNegOwned { var: Var, pos: *const BddOrigin<Var, Leaf>, neg: Box<BddOrigin<Var, Leaf>> },
+    NodeBothOwned { var: Var, pos: Box<BddOrigin<Var, Leaf>>, neg: Box<BddOrigin<Var, Leaf>> },
 }
 
 impl<Var, Leaf> BddOrigin<Var, Leaf> {
@@ -115,7 +99,9 @@ impl<'a, Var, Leaf> Bdd<'a, Var, Leaf> {
         let mut cur = self;
         loop {
             match cur.type_ {
-                BddType::Leaf => { return &*get_behind_struct(cur); }
+                BddType::Leaf => {
+                    return &*get_behind_struct(cur);
+                }
                 BddType::NodeNoOwned => {
                     let node: &NodeNoOwned<Var, Leaf> = &*get_behind_struct(cur);
                     cur = if f(&node.var) { &*node.pos } else { &*node.neg };
@@ -136,25 +122,23 @@ impl<'a, Var, Leaf> Bdd<'a, Var, Leaf> {
         }
     }
 
-    pub unsafe fn deserialize
-    <
+    pub unsafe fn deserialize<
         After,
         FLeaf: FnMut(BuildCursor<Leaf>) -> BuildCursor<Self>,
         FVar: FnMut(&mut Var),
-    >
-    (
+    >(
         mut cur: BuildCursor<Self>,
         mut f_leaf: FLeaf,
         mut f_var: FVar,
-    )
-    -> BuildCursor<After>
-    {
+    ) -> BuildCursor<After> {
         let shifter = Shifter(cur.buf);
         let mut todo_count: usize = 1;
         while todo_count > 0 {
             let bdd = &mut *cur.get_mut();
             match bdd.type_ {
-                BddType::Leaf => { cur = f_leaf(cur.behind(1)); }
+                BddType::Leaf => {
+                    cur = f_leaf(cur.behind(1));
+                }
                 BddType::NodeNoOwned => {
                     let node_cur = cur.behind(1);
                     let node: &mut NodeNoOwned<Var, Leaf> = &mut *node_cur.get_mut();
@@ -189,16 +173,20 @@ impl<'a, Var: Build, Leaf: Build> Build for Bdd<'a, Var, Leaf> {
 }
 
 impl<'a, Var: Build, Leaf: Build> Bdd<'a, Var, Leaf> {
-    pub fn reserve<FLeaf: FnMut(&Leaf::Origin, &mut Reserve)>
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut fleaf: FLeaf) -> usize
-    {
+    pub fn reserve<FLeaf: FnMut(&Leaf::Origin, &mut Reserve)>(
+        origin: &<Self as Build>::Origin,
+        sz: &mut Reserve,
+        mut fleaf: FLeaf,
+    ) -> usize {
         sz.add::<Self>(0);
         let my_addr = sz.0;
         let mut todo: Vec<&BddOrigin<Var::Origin, Leaf::Origin>> = vec![origin];
         while let Some(origin) = todo.pop() {
             sz.add::<Self>(1);
             match origin {
-                BddOrigin::Leaf(leaf) => { fleaf(leaf, sz); }
+                BddOrigin::Leaf(leaf) => {
+                    fleaf(leaf, sz);
+                }
                 BddOrigin::NodeNoOwned { .. } => {
                     sz.add::<NodeNoOwned<Var::Origin, Leaf::Origin>>(1);
                 }
@@ -227,20 +215,16 @@ impl<'a, Var: Build, Leaf: Build> Bdd<'a, Var, Leaf> {
         my_addr
     }
 
-    pub unsafe fn serialize
-    <
+    pub unsafe fn serialize<
         After,
         FLeaf: FnMut(&Leaf::Origin, BuildCursor<Leaf>) -> BuildCursor<Self>,
         FVar: FnMut(&Var::Origin, &mut Var),
-    >
-    (
+    >(
         origin: &<Self as Build>::Origin,
         mut cur: BuildCursor<Self>,
         mut fleaf: FLeaf,
-        mut fvar: FVar
-    )
-    -> BuildCursor<After>
-    {
+        mut fvar: FVar,
+    ) -> BuildCursor<After> {
         let mut todo: Vec<&BddOrigin<Var::Origin, Leaf::Origin>> = vec![origin];
         let mut ptrmap: HashMap<*const <Self as Build>::Origin, usize> = HashMap::new();
         let mut curs = Vec::new();
@@ -322,7 +306,6 @@ impl<'a, Var: Build, Leaf: Build> Bdd<'a, Var, Leaf> {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use super::super::vec::BlobVec;
@@ -336,54 +319,45 @@ mod test {
         let leaf_true = Box::new(BddOrigin::Leaf(b"true".to_vec()));
         let ptr_false: *const _ = &*leaf_false;
         let ptr_true: *const _ = &*leaf_true;
-        let node_b_pos = BddOrigin::NodePosOwned {
-            var: b,
-            pos: leaf_true,
-            neg: ptr_false,
-        };
-        let node_b_neg = BddOrigin::NodeNoOwned {
-            var: b,
-            pos: ptr_false,
-            neg: ptr_true,
-        };
+        let node_b_pos = BddOrigin::NodePosOwned { var: b, pos: leaf_true, neg: ptr_false };
+        let node_b_neg = BddOrigin::NodeNoOwned { var: b, pos: ptr_false, neg: ptr_true };
         let node_a = BddOrigin::NodeBothOwned {
             var: a,
             pos: Box::new(node_b_pos),
             neg: Box::new(node_b_neg),
         };
-        let node_c = BddOrigin::NodeBothOwned {
-            var: c,
-            pos: Box::new(node_a),
-            neg: leaf_false,
-        };
+        let node_c = BddOrigin::NodeBothOwned { var: c, pos: Box::new(node_a), neg: leaf_false };
 
         let mut sz = Reserve(0);
-        Bdd::<u8, BlobVec<u8>>::reserve(&node_c, &mut sz,
-            |xs, sz| { BlobVec::<u8>::reserve(xs, sz); }
-        );
+        Bdd::<u8, BlobVec<u8>>::reserve(&node_c, &mut sz, |xs, sz| {
+            BlobVec::<u8>::reserve(xs, sz);
+        });
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
         unsafe {
             Bdd::<u8, BlobVec<u8>>::serialize::<(), _, _>(
-                &node_c, cur.clone(),
-                |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y }) },
-                |x, xcur| { *xcur = *x; },
+                &node_c,
+                cur.clone(),
+                |x, xcur| BlobVec::<u8>::serialize(x, xcur, |y, ycur| *ycur = *y),
+                |x, xcur| {
+                    *xcur = *x;
+                },
             );
             Bdd::<u8, BlobVec<u8>>::deserialize::<(), _, _>(
                 cur,
-                |xcur| { BlobVec::<u8>::deserialize(xcur, |_| ()) },
+                |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
                 |_| (),
             );
         }
         let bdd = unsafe { &*(buf.as_ptr() as *const Bdd<u8, BlobVec<u8>>) };
 
-        let leaf = unsafe { bdd.evaluate(|x| { [false, false, false][*x as usize] }).as_ref() };
+        let leaf = unsafe { bdd.evaluate(|x| [false, false, false][*x as usize]).as_ref() };
         assert_eq!(leaf, &b"false".to_vec());
-        let leaf = unsafe { bdd.evaluate(|x| { [false, false, true][*x as usize] }).as_ref() };
+        let leaf = unsafe { bdd.evaluate(|x| [false, false, true][*x as usize]).as_ref() };
         assert_eq!(leaf, &b"true".to_vec());
-        let leaf = unsafe { bdd.evaluate(|x| { [false, true, true][*x as usize] }).as_ref() };
+        let leaf = unsafe { bdd.evaluate(|x| [false, true, true][*x as usize]).as_ref() };
         assert_eq!(leaf, &b"false".to_vec());
-        let leaf = unsafe { bdd.evaluate(|x| { [true, true, true][*x as usize] }).as_ref() };
+        let leaf = unsafe { bdd.evaluate(|x| [true, true, true][*x as usize]).as_ref() };
         assert_eq!(leaf, &b"true".to_vec());
     }
 }

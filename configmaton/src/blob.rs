@@ -1,27 +1,27 @@
 // WARNING: No endianness handling is implemented yet, as we have no use case for BigEndian.
 
-use std::mem::{align_of, size_of};
 use std::marker::PhantomData;
+use std::mem::{align_of, size_of};
 
 use twox_hash::XxHash64;
 
 use crate::guards::Guard;
 use vec::BlobVec;
 
-pub mod hashmap;
-pub mod list;
+pub mod arrmap;
 pub mod assoc_list;
+pub mod automaton;
+pub mod bdd;
 pub mod flagellum;
+pub mod hashmap;
+pub mod keyval_state;
+pub mod list;
+pub mod listmap;
+pub mod sediment;
+pub mod state;
 pub mod tupellum;
 pub mod vec;
-pub mod sediment;
 pub mod vecmap;
-pub mod listmap;
-pub mod arrmap;
-pub mod state;
-pub mod bdd;
-pub mod keyval_state;
-pub mod automaton;
 
 pub trait MyHash {
     fn my_hash(&self) -> usize;
@@ -66,7 +66,9 @@ impl<'a, 'b> Matches<BlobVec<'a, u8>> for &'b [u8] {
 pub struct AnyMatch;
 
 impl<T> Matches<T> for AnyMatch {
-    unsafe fn matches(&self, _: &T) -> bool { true }
+    unsafe fn matches(&self, _: &T) -> bool {
+        true
+    }
 }
 
 pub trait UnsafeIterator {
@@ -108,7 +110,7 @@ impl Reserve {
 }
 
 #[derive(Copy)]
-pub struct BuildCursor<A>{
+pub struct BuildCursor<A> {
     pub cur: usize,
     pub buf: *mut u8,
     _phantom: PhantomData<A>,
@@ -120,11 +122,7 @@ impl<A> BuildCursor<A> {
     }
 
     pub fn goto<B>(&self, at: *mut B) -> BuildCursor<B> {
-        BuildCursor {
-            cur: at as usize - self.buf as usize,
-            buf: self.buf,
-            _phantom: PhantomData
-        }
+        BuildCursor { cur: at as usize - self.buf as usize, buf: self.buf, _phantom: PhantomData }
     }
 
     pub fn inc(&mut self) {
@@ -135,7 +133,7 @@ impl<A> BuildCursor<A> {
         BuildCursor {
             cur: align_up(self.cur + size_of::<A>() * n, align_of::<B>()),
             buf: self.buf,
-            _phantom: PhantomData
+            _phantom: PhantomData,
         }
     }
 
@@ -143,16 +141,12 @@ impl<A> BuildCursor<A> {
         BuildCursor {
             cur: align_up(self.cur, align_of::<B>()),
             buf: self.buf,
-            _phantom: PhantomData
+            _phantom: PhantomData,
         }
     }
 
     pub fn transmute<B>(&self) -> BuildCursor<B> {
-        BuildCursor {
-            cur: self.cur,
-            buf: self.buf,
-            _phantom: PhantomData
-        }
+        BuildCursor { cur: self.cur, buf: self.buf, _phantom: PhantomData }
     }
 
     pub unsafe fn get_mut(&self) -> *mut A {
@@ -177,12 +171,14 @@ pub trait AssocsSuper<'a> {
     type Key: 'a;
     type Val: 'a;
     type I<'b, X: 'b + Matches<Self::Key>>: UnsafeIterator<Item = (&'a Self::Key, &'a Self::Val)>
-        where 'a: 'b;
+    where
+        'a: 'b;
 }
 
 pub trait Assocs<'a>: AssocsSuper<'a> {
     unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
-        where 'a: 'b + 'c;
+    where
+        'a: 'b + 'c;
 }
 
 pub trait IsEmpty {
@@ -207,10 +203,18 @@ pub trait Build {
     type Origin;
 }
 
-impl Build for u8 { type Origin = u8; }
-impl Build for Guard { type Origin = Guard; }
-impl Build for usize { type Origin = usize; }
-impl Build for () { type Origin = (); }
+impl Build for u8 {
+    type Origin = u8;
+}
+impl Build for Guard {
+    type Origin = Guard;
+}
+impl Build for usize {
+    type Origin = usize;
+}
+impl Build for () {
+    type Origin = ();
+}
 
 #[cfg(test)]
 pub mod tests {
@@ -220,8 +224,13 @@ pub mod tests {
 
     use super::*;
     use super::{
-        hashmap::*, assoc_list::*, state::{*, build::*}, vecmap::*, listmap::*, flagellum::*,
+        assoc_list::*,
+        flagellum::*,
+        hashmap::*,
+        listmap::*,
         sediment::*,
+        state::{build::*, *},
+        vecmap::*,
     };
     use crate::char_nfa;
 
@@ -234,11 +243,15 @@ pub mod tests {
         assert_eq!(sz.0, 4 * size_of::<usize>());
         let mut buf = vec![0u8; sz.0];
         let mut cur = BuildCursor::new(buf.as_mut_ptr());
-        cur = unsafe { BlobVec::<usize>::serialize(&origin, cur, |x, xcur| { *xcur = *x; }) };
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        cur = unsafe {
+            BlobVec::<usize>::serialize(&origin, cur, |x, xcur| {
+                *xcur = *x;
+            })
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
         let mut cur = BuildCursor::new(buf.as_mut_ptr());
         cur = unsafe { BlobVec::<usize>::deserialize(cur, |_| ()) };
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
         let blobvec = unsafe { &*(buf.as_ptr() as *const BlobVec<usize>) };
         assert_eq!(blobvec.len, 3);
         assert_eq!(unsafe { blobvec.get(0) }, &1);
@@ -249,7 +262,7 @@ pub mod tests {
         assert_eq!(unsafe { iter.next() }, Some(&3));
         assert_eq!(unsafe { iter.next() }, Some(&5));
         assert_eq!(unsafe { iter.next() }, None);
-        assert_eq!(unsafe{ blobvec.as_ref() }, &[1, 3, 5]);
+        assert_eq!(unsafe { blobvec.as_ref() }, &[1, 3, 5]);
     }
 
     #[test]
@@ -262,19 +275,31 @@ pub mod tests {
         assert_eq!(addr, if align_of::<usize>() == 1 { 0 } else { align_of::<usize>() });
         let mut buf = vec![0u8; sz.0];
         let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr) });
-        cur = unsafe { VecMap::<usize, BlobVec<u8>>::serialize(&origin, cur,
-            |x, xcur| { *xcur = *x; },
-            |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }) }
-        )};
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        cur = unsafe {
+            VecMap::<usize, BlobVec<u8>>::serialize(
+                &origin,
+                cur,
+                |x, xcur| {
+                    *xcur = *x;
+                },
+                |x, xcur| {
+                    BlobVec::<u8>::serialize(x, xcur, |y, ycur| {
+                        *ycur = *y;
+                    })
+                },
+            )
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
         let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr) });
-        cur = unsafe { VecMap::<usize, BlobVec<u8>>::deserialize(cur,
-            |_| (),
-            |xcur| BlobVec::<u8>::deserialize(xcur, |_| ())
-        )};
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
-        let vecmap = unsafe {
-            &*(buf.as_ptr().add(addr) as *const VecMap::<usize, BlobVec<u8>>) };
+        cur = unsafe {
+            VecMap::<usize, BlobVec<u8>>::deserialize(
+                cur,
+                |_| (),
+                |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
+            )
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
+        let vecmap = unsafe { &*(buf.as_ptr().add(addr) as *const VecMap<usize, BlobVec<u8>>) };
 
         let mut iter = unsafe { vecmap.iter_matches(&EqMatch(&3)) };
         let (k, v) = unsafe { iter.next().unwrap() };
@@ -298,26 +323,47 @@ pub mod tests {
             (b"aa".to_vec(), b"".to_vec()),
         ];
         let mut sz = Reserve(1);
-        let addr = ListMap::<BlobVec<u8>, BlobVec<u8>>::reserve(&origin, &mut sz,
-            |x, sz| { BlobVec::<u8>::reserve(x, sz); },
-            |x, sz| { BlobVec::<u8>::reserve(x, sz); },
+        let addr = ListMap::<BlobVec<u8>, BlobVec<u8>>::reserve(
+            &origin,
+            &mut sz,
+            |x, sz| {
+                BlobVec::<u8>::reserve(x, sz);
+            },
+            |x, sz| {
+                BlobVec::<u8>::reserve(x, sz);
+            },
         );
         assert_eq!(addr, if align_of::<usize>() == 1 { 0 } else { align_of::<usize>() });
         let mut buf = vec![0u8; sz.0];
         let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr) });
-        cur = unsafe { ListMap::<BlobVec<u8>, BlobVec<u8>>::serialize(&origin, cur,
-            |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }) },
-            |x, xcur| { BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }) },
-        )};
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        cur = unsafe {
+            ListMap::<BlobVec<u8>, BlobVec<u8>>::serialize(
+                &origin,
+                cur,
+                |x, xcur| {
+                    BlobVec::<u8>::serialize(x, xcur, |y, ycur| {
+                        *ycur = *y;
+                    })
+                },
+                |x, xcur| {
+                    BlobVec::<u8>::serialize(x, xcur, |y, ycur| {
+                        *ycur = *y;
+                    })
+                },
+            )
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
         let mut cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(addr) });
-        cur = unsafe { ListMap::<BlobVec<u8>, BlobVec<u8>>::deserialize(cur,
-            |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
-            |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
-        )};
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
-        let vecmap = unsafe {
-            &*(buf.as_ptr().add(addr) as *const ListMap::<BlobVec<u8>, BlobVec<u8>>) };
+        cur = unsafe {
+            ListMap::<BlobVec<u8>, BlobVec<u8>>::deserialize(
+                cur,
+                |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
+                |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
+            )
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
+        let vecmap =
+            unsafe { &*(buf.as_ptr().add(addr) as *const ListMap<BlobVec<u8>, BlobVec<u8>>) };
 
         let key = b"aa".as_ref();
         let mut iter = unsafe { vecmap.iter_matches(&key) };
@@ -337,45 +383,62 @@ pub mod tests {
         }
         let mut sz = Reserve(0);
         let my_addr = BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::reserve(
-            &origin, &mut sz,
+            &origin,
+            &mut sz,
             |alist, sz| {
                 AssocList::<Flagellum<u8, BlobVec<u8>>>::reserve(alist, sz, |kv, sz| {
                     Flagellum::<u8, BlobVec<u8>>::reserve(kv, sz, |v, sz| {
                         BlobVec::<u8>::reserve(v, sz);
                     });
                 });
-            }
+            },
         );
         assert_eq!(my_addr, 0);
         let mut buf = vec![0u8; sz.0];
         let mut cur = BuildCursor::new(buf.as_mut_ptr());
-        cur = unsafe { BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::serialize(
-            &origin, cur,
-            |alist, alist_cur| {
-                AssocList::<Flagellum<u8, BlobVec<u8>>>::serialize(alist, alist_cur,
-                    |kv, kv_cur| {
-                        Flagellum::<u8, BlobVec<u8>>::serialize(kv, kv_cur,
-                            |k, k_cur| { *k_cur = *k; },
-                            |v, v_cur| {
-                                BlobVec::<u8>::serialize(v, v_cur, |x, x_cur| { *x_cur = *x; })
-                            }
-                        )
-                    }
-                )
-            }
-        )};
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
-        let mut cur = BuildCursor::new(buf.as_mut_ptr());
-        cur = unsafe { BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::deserialize(cur,
-            |alist_cur| AssocList::<Flagellum<u8, BlobVec<u8>>>::deserialize(alist_cur,
-                |kv_cur| Flagellum::<u8, BlobVec<u8>>::deserialize(kv_cur, |_| (), |v_cur|
-                    BlobVec::<u8>::deserialize(v_cur, |_| ())
-                )
+        cur = unsafe {
+            BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::serialize(
+                &origin,
+                cur,
+                |alist, alist_cur| {
+                    AssocList::<Flagellum<u8, BlobVec<u8>>>::serialize(
+                        alist,
+                        alist_cur,
+                        |kv, kv_cur| {
+                            Flagellum::<u8, BlobVec<u8>>::serialize(
+                                kv,
+                                kv_cur,
+                                |k, k_cur| {
+                                    *k_cur = *k;
+                                },
+                                |v, v_cur| {
+                                    BlobVec::<u8>::serialize(v, v_cur, |x, x_cur| {
+                                        *x_cur = *x;
+                                    })
+                                },
+                            )
+                        },
+                    )
+                },
             )
-        )};
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
-        let hash = unsafe { &*(buf.as_ptr() as
-            *const BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>) };
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
+        let mut cur = BuildCursor::new(buf.as_mut_ptr());
+        cur = unsafe {
+            BlobHashMap::<AssocList<Flagellum<u8, BlobVec<u8>>>>::deserialize(cur, |alist_cur| {
+                AssocList::<Flagellum<u8, BlobVec<u8>>>::deserialize(alist_cur, |kv_cur| {
+                    Flagellum::<u8, BlobVec<u8>>::deserialize(
+                        kv_cur,
+                        |_| (),
+                        |v_cur| BlobVec::<u8>::deserialize(v_cur, |_| ()),
+                    )
+                })
+            })
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
+        let hash = unsafe {
+            &*(buf.as_ptr() as *const BlobHashMap<AssocList<Flagellum<u8, BlobVec<u8>>>>)
+        };
         assert_eq!(unsafe { hash.get(&3).unwrap().as_ref() }, b"hello".as_ref());
     }
 
@@ -383,50 +446,83 @@ pub mod tests {
     fn test_sediment_and_tupellum() {
         let origin = (vec![b"".to_vec(), b"foo".to_vec(), b"hello".to_vec()], b"barr".to_vec());
         let mut sz = Reserve(0);
-        Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::reserve(&origin, &mut sz,
-            |xs, sz| { Sediment::<BlobVec<u8>>::reserve(xs, sz,
-                |xs, sz| { BlobVec::<u8>::reserve(xs, sz); }); },
-            |xs, sz| { BlobVec::<u8>::reserve(xs, sz); },
+        Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::reserve(
+            &origin,
+            &mut sz,
+            |xs, sz| {
+                Sediment::<BlobVec<u8>>::reserve(xs, sz, |xs, sz| {
+                    BlobVec::<u8>::reserve(xs, sz);
+                });
+            },
+            |xs, sz| {
+                BlobVec::<u8>::reserve(xs, sz);
+            },
         );
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(0) });
-        let _: BuildCursor<()> = unsafe { Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::serialize(
-            &origin, cur,
-            |x, xcur| Sediment::<BlobVec<u8>>::serialize(x, xcur,
-                |x, bcur| BlobVec::<u8>::serialize(x, bcur, |y, ycur| { *ycur = *y; })),
-            |x, xcur| BlobVec::<u8>::serialize(x, xcur, |y, ycur| { *ycur = *y; }),
-        )};
+        let _: BuildCursor<()> = unsafe {
+            Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::serialize(
+                &origin,
+                cur,
+                |x, xcur| {
+                    Sediment::<BlobVec<u8>>::serialize(x, xcur, |x, bcur| {
+                        BlobVec::<u8>::serialize(x, bcur, |y, ycur| {
+                            *ycur = *y;
+                        })
+                    })
+                },
+                |x, xcur| {
+                    BlobVec::<u8>::serialize(x, xcur, |y, ycur| {
+                        *ycur = *y;
+                    })
+                },
+            )
+        };
         let cur = BuildCursor::new(unsafe { buf.as_mut_ptr().add(0) });
-        unsafe { Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::deserialize::<(), _, _>(cur,
-            |xcur| Sediment::<BlobVec<u8>>::deserialize(xcur,
-                |xcur| BlobVec::<u8>::deserialize(xcur, |_| ())),
-            |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
-        )};
-        let tupellum = unsafe {
-            &*(buf.as_ptr() as *const Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>) };
+        unsafe {
+            Tupellum::<Sediment<BlobVec<u8>>, BlobVec<u8>>::deserialize::<(), _, _>(
+                cur,
+                |xcur| {
+                    Sediment::<BlobVec<u8>>::deserialize(xcur, |xcur| {
+                        BlobVec::<u8>::deserialize(xcur, |_| ())
+                    })
+                },
+                |xcur| BlobVec::<u8>::deserialize(xcur, |_| ()),
+            )
+        };
+        let tupellum =
+            unsafe { &*(buf.as_ptr() as *const Tupellum<Sediment<BlobVec<u8>>, BlobVec<u8>>) };
         let mut behind: *const BlobVec<u8> = std::ptr::null();
         let mut contents = vec![];
-        unsafe { tupellum.a.each( |x| {
-            contents.push(x.as_ref());
-            behind = x.behind();
-            behind
-        })};
+        unsafe {
+            tupellum.a.each(|x| {
+                contents.push(x.as_ref());
+                behind = x.behind();
+                behind
+            })
+        };
         assert_eq!(contents, vec![b"".as_slice(), b"foo".as_slice(), b"hello".as_slice()]);
         assert_eq!(unsafe { (*behind).as_ref() }, b"barr".as_slice());
     }
 
     pub struct TestU8BuildConfig;
     impl U8BuildConfig for TestU8BuildConfig {
-        fn guard_size_keep(&self) -> u32 { 2 }
-        fn hashmap_cap_power_fn(&self, _len: usize) -> usize { 1 }
-        fn dense_guard_count(&self) -> usize { 3 }
+        fn guard_size_keep(&self) -> u32 {
+            2
+        }
+        fn hashmap_cap_power_fn(&self, _len: usize) -> usize {
+            1
+        }
+        fn dense_guard_count(&self) -> usize {
+            3
+        }
     }
 
-    pub unsafe fn create_states<'a>(buf: &'a mut Vec<u8>, qs: Vec<char_nfa::State>)
-        -> Vec<&'a U8State<'a>>
-    {
-        let states = qs.iter().map(|q|
-            U8StatePrepared::prepare(&q, &TestU8BuildConfig)).collect();
+    pub unsafe fn create_states<'a>(
+        buf: &'a mut Vec<u8>,
+        qs: Vec<char_nfa::State>,
+    ) -> Vec<&'a U8State<'a>> {
+        let states = qs.iter().map(|q| U8StatePrepared::prepare(&q, &TestU8BuildConfig)).collect();
         let mut sz = Reserve(0);
         let mut addrs = Vec::<usize>::new();
         let list_addr = Sediment::<U8State>::reserve(&states, &mut sz, |state, sz| {
@@ -436,13 +532,17 @@ pub mod tests {
         buf.resize(sz.0 + size_of::<usize>(), 0);
         let buf = align_up_mut_ptr::<u8, u128>(buf.as_mut_ptr()) as *mut u8;
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe { Sediment::<U8State>::serialize(&states, cur,
-            |state, state_cur| { U8State::serialize(state, state_cur, &addrs) })};
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        cur = unsafe {
+            Sediment::<U8State>::serialize(&states, cur, |state, state_cur| {
+                U8State::serialize(state, state_cur, &addrs)
+            })
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
         let mut cur = BuildCursor::new(buf);
-        cur = unsafe { Sediment::<U8State>::deserialize(cur,
-            |state_cur| U8State::deserialize(state_cur)) };
-        assert_eq!(cur.cur, cur.cur);  // suppress unused_assign warning
+        cur = unsafe {
+            Sediment::<U8State>::deserialize(cur, |state_cur| U8State::deserialize(state_cur))
+        };
+        assert_eq!(cur.cur, cur.cur); // suppress unused_assign warning
         (0..qs.len()).map(|i| &*(buf.add(addrs[i]) as *const U8State)).collect()
     }
 
@@ -487,10 +587,7 @@ pub mod tests {
         assert!(unsafe { iter.next() }.is_none());
 
         let mut iter = expect_dense(unsafe { state0.iter_matches(&b'a') });
-        let mut succs = vec![
-            *unsafe { iter.next() }.unwrap(),
-            *unsafe { iter.next() }.unwrap(),
-        ];
+        let mut succs = vec![*unsafe { iter.next() }.unwrap(), *unsafe { iter.next() }.unwrap()];
         assert!(unsafe { iter.next() }.is_none());
         succs.sort();
         assert_eq!(succs, [state0 as *const U8State, state1]);

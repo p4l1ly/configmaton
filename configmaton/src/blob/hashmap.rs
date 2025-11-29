@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use super::{
-    Assocs, UnsafeIterator, Build, BuildCursor, IsEmpty, Reserve, Shifter, MyHash, EqMatch
+    Assocs, Build, BuildCursor, EqMatch, IsEmpty, MyHash, Reserve, Shifter, UnsafeIterator,
 };
 
 #[repr(C)]
@@ -13,7 +13,8 @@ pub struct BlobHashMap<'a, AList> {
 
 impl<'a, AList: Assocs<'a>> BlobHashMap<'a, AList> {
     pub unsafe fn get(&self, key: &AList::Key) -> Option<&AList::Val>
-        where AList::Key: Eq + MyHash
+    where
+        AList::Key: Eq + MyHash,
     {
         let ix = key.my_hash() & self.mask;
         let alist_ptr = *(&self.arr as *const *const AList).add(ix);
@@ -26,12 +27,10 @@ impl<'a, AList: Assocs<'a>> BlobHashMap<'a, AList> {
 }
 
 impl<'a, AList> BlobHashMap<'a, AList> {
-    pub unsafe fn deserialize
-    <
-        F: FnMut(BuildCursor<AList>) -> BuildCursor<AList>,
-        After,
-    >
-    (cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After> {
+    pub unsafe fn deserialize<F: FnMut(BuildCursor<AList>) -> BuildCursor<AList>, After>(
+        cur: BuildCursor<Self>,
+        mut f: F,
+    ) -> BuildCursor<After> {
         let mut arr_cur = cur.transmute::<usize>().behind::<*const AList>(1);
         let hashmap_cap = (*cur.get_mut()).mask + 1;
         let mut alist_cur = arr_cur.behind::<AList>(hashmap_cap);
@@ -51,9 +50,15 @@ impl<'a, AList: Build> Build for BlobHashMap<'a, AList> {
     type Origin = Vec<AList::Origin>;
 }
 
-impl<'a, AList: Build> BlobHashMap<'a, AList> where AList::Origin: IsEmpty {
-    pub fn reserve<F: FnMut(&AList::Origin, &mut Reserve)>
-    (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut f: F) -> usize {
+impl<'a, AList: Build> BlobHashMap<'a, AList>
+where
+    AList::Origin: IsEmpty,
+{
+    pub fn reserve<F: FnMut(&AList::Origin, &mut Reserve)>(
+        origin: &<Self as Build>::Origin,
+        sz: &mut Reserve,
+        mut f: F,
+    ) -> usize {
         sz.add::<Self>(0);
         let my_addr = sz.0;
         sz.add::<usize>(1);
@@ -66,13 +71,14 @@ impl<'a, AList: Build> BlobHashMap<'a, AList> where AList::Origin: IsEmpty {
         my_addr
     }
 
-    pub unsafe fn serialize
-    <
+    pub unsafe fn serialize<
         F: FnMut(&AList::Origin, BuildCursor<AList>) -> BuildCursor<AList>,
         After,
-    >
-    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
-    {
+    >(
+        origin: &<Self as Build>::Origin,
+        cur: BuildCursor<Self>,
+        mut f: F,
+    ) -> BuildCursor<After> {
         (*cur.get_mut()).mask = origin.len() - 1;
         let mut arr_cur = cur.transmute::<usize>().behind::<*const AList>(1);
         let mut alist_cur = arr_cur.behind::<AList>(origin.len());

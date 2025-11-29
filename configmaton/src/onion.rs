@@ -1,7 +1,10 @@
-use std::{ops::{Deref, DerefMut}, sync::{RwLock, RwLockReadGuard, RwLockWriteGuard}};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 
-use hashbrown::HashMap;
 use crate::holder::Holder;
+use hashbrown::HashMap;
 
 pub struct Onion<'a, L: Locker, Child> {
     parent: Option<*const Self>,
@@ -30,9 +33,15 @@ impl LockerSuper for ThreadUnsafeLocker {
 impl Locker for ThreadUnsafeLocker {
     type Lock<T> = T;
 
-    fn new<T>(x: T) -> Self::Lock<T> { x }
-    fn read<'a, T>(lock: &'a Self::Lock<T>) -> Self::Guard<'a, T> { lock }
-    fn write<'a, T>(lock: &'a mut Self::Lock<T>) -> Self::GuardMut<'a, T> { lock }
+    fn new<T>(x: T) -> Self::Lock<T> {
+        x
+    }
+    fn read<'a, T>(lock: &'a Self::Lock<T>) -> Self::Guard<'a, T> {
+        lock
+    }
+    fn write<'a, T>(lock: &'a mut Self::Lock<T>) -> Self::GuardMut<'a, T> {
+        lock
+    }
 }
 
 pub struct ThreadSafeLocker;
@@ -43,26 +52,28 @@ impl LockerSuper for ThreadSafeLocker {
 impl Locker for ThreadSafeLocker {
     type Lock<T> = RwLock<T>;
 
-    fn new<T>(x: T) -> Self::Lock<T> { RwLock::new(x) }
-    fn read<'a, T>(lock: &'a Self::Lock<T>) -> Self::Guard<'a, T> { lock.read().unwrap() }
-    fn write<'a, T>(lock: &'a mut Self::Lock<T>) -> Self::GuardMut<'a, T> { lock.write().unwrap() }
+    fn new<T>(x: T) -> Self::Lock<T> {
+        RwLock::new(x)
+    }
+    fn read<'a, T>(lock: &'a Self::Lock<T>) -> Self::Guard<'a, T> {
+        lock.read().unwrap()
+    }
+    fn write<'a, T>(lock: &'a mut Self::Lock<T>) -> Self::GuardMut<'a, T> {
+        lock.write().unwrap()
+    }
 }
 
-impl<'a, L: Locker, Child> Onion<'a, L, Child>
-{
+impl<'a, L: Locker, Child> Onion<'a, L, Child> {
     pub fn new() -> Self {
-        Onion {
-            parent: None,
-            children: Holder::new(),
-            data: L::new(HashMap::new()),
-        }
+        Onion { parent: None, children: Holder::new(), data: L::new(HashMap::new()) }
     }
 
     // Unfortunately, I did not find a way to express that the parent outlives child but both
     // remain mutable.
-    pub fn make_child<NewChild: FnOnce(Self) -> Child>
-        (&mut self, new_child: NewChild) -> *mut Child
-    {
+    pub fn make_child<NewChild: FnOnce(Self) -> Child>(
+        &mut self,
+        new_child: NewChild,
+    ) -> *mut Child {
         self.children.add(new_child(Onion {
             parent: Some(self),
             children: Holder::new(),

@@ -1,8 +1,11 @@
 use std::{fs::File, io::Read};
 
-use configmaton::{blob::{keyval_state::LeafOrigin, state::build::U8BuildConfig}, keyval_nfa::{Cmd, Msg, Parser as AutParser}};
 use clap;
 use clap::Parser;
+use configmaton::{
+    blob::{keyval_state::LeafOrigin, state::build::U8BuildConfig},
+    keyval_nfa::{Cmd, Msg, Parser as AutParser},
+};
 
 #[derive(Parser)]
 struct Args {
@@ -15,14 +18,20 @@ struct Args {
 
 pub struct BuildConfig;
 impl U8BuildConfig for BuildConfig {
-    fn guard_size_keep(&self) -> u32 { 10 }
-    fn hashmap_cap_power_fn(&self, _len: usize) -> usize { 3 }
-    fn dense_guard_count(&self) -> usize { 15 }
+    fn guard_size_keep(&self) -> u32 {
+        10
+    }
+    fn hashmap_cap_power_fn(&self, _len: usize) -> usize {
+        3
+    }
+    fn dense_guard_count(&self) -> usize {
+        15
+    }
 }
 
-pub fn json_to_automaton_matchrun(json: &str)
-    -> Result<(Msg, AutParser, LeafOrigin), serde_json::Error>
-{
+pub fn json_to_automaton_matchrun(
+    json: &str,
+) -> Result<(Msg, AutParser, LeafOrigin), serde_json::Error> {
     let config: Vec<Cmd> = serde_json::from_str(json)?;
     let (parser, init) = AutParser::parse(config);
     let msg = Msg::serialize(&parser, &init, &BuildConfig);

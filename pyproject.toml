@@ -1,0 +1,20 @@
+[project]
+name = "configmaton-workspace"
+version = "0.1.0"
+description = "Workspace for configmaton development"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["python"]
+
+[tool.uv.sources]
+configmaton = { workspace = true }
+
+[tool.black]
+line-length = 99
+target-version = ["py311"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

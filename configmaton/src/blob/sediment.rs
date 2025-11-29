@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use super::{Build, BuildCursor, Reserve, get_behind_struct};
+use super::{get_behind_struct, Build, BuildCursor, Reserve};
 
 #[repr(C)]
 pub struct Sediment<'a, X> {
@@ -20,33 +20,44 @@ impl<'a, X> Sediment<'a, X> {
         }
     }
 
-    pub unsafe fn deserialize<F: FnMut(BuildCursor<X>) -> BuildCursor<X>, After>
-    (cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
-    {
+    pub unsafe fn deserialize<F: FnMut(BuildCursor<X>) -> BuildCursor<X>, After>(
+        cur: BuildCursor<Self>,
+        mut f: F,
+    ) -> BuildCursor<After> {
         let mut xcur = cur.behind(1);
-        for _ in 0..(*cur.get_mut()).len { xcur = f(xcur); }
+        for _ in 0..(*cur.get_mut()).len {
+            xcur = f(xcur);
+        }
         xcur.align()
     }
 }
 
 impl<'a, X: Build> Sediment<'a, X> {
-    pub fn reserve<F: FnMut(&X::Origin, &mut Reserve)>
-        (origin: &<Self as Build>::Origin, sz: &mut Reserve, mut f: F) -> usize
-    {
+    pub fn reserve<F: FnMut(&X::Origin, &mut Reserve)>(
+        origin: &<Self as Build>::Origin,
+        sz: &mut Reserve,
+        mut f: F,
+    ) -> usize {
         sz.add::<Self>(0);
         let my_addr = sz.0;
         sz.add::<Self>(1);
-        for x in origin.iter() { f(x, sz); }
+        for x in origin.iter() {
+            f(x, sz);
+        }
         sz.add::<X>(0);
         my_addr
     }
 
-    pub unsafe fn serialize<F: FnMut(&X::Origin, BuildCursor<X>) -> BuildCursor<X>, After>
-    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
-    {
+    pub unsafe fn serialize<F: FnMut(&X::Origin, BuildCursor<X>) -> BuildCursor<X>, After>(
+        origin: &<Self as Build>::Origin,
+        cur: BuildCursor<Self>,
+        mut f: F,
+    ) -> BuildCursor<After> {
         (*cur.get_mut()).len = origin.len();
         let mut xcur = cur.behind(1);
-        for x in origin.iter() { xcur = f(x, xcur); }
+        for x in origin.iter() {
+            xcur = f(x, xcur);
+        }
         xcur.align()
     }
 }

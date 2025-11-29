@@ -1,13 +1,15 @@
 use indexmap::IndexSet;
 
-use crate::blob::{state::{U8State, U8StateIterator}, UnsafeIterator};
+use crate::blob::{
+    state::{U8State, U8StateIterator},
+    UnsafeIterator,
+};
 
 pub struct Runner<'a> {
     pub states: IndexSet<*const U8State<'a>>,
 }
 
-impl<'a> Runner<'a>
-{
+impl<'a> Runner<'a> {
     // Initialize the state of the automaton.
     pub fn new<I: IntoIterator<Item = *const U8State<'a>>>(initial_states: I) -> Self {
         Runner { states: initial_states.into_iter().collect() }
@@ -25,12 +27,12 @@ impl<'a> Runner<'a>
                     while let Some(right) = iter.next() {
                         self.states.insert(right);
                     }
-                },
+                }
                 U8StateIterator::Dense(mut iter) => {
                     while let Some(right) = iter.next() {
                         self.states.insert(*right);
                     }
-                },
+                }
             }
         }
     }
@@ -48,15 +50,13 @@ mod tests {
 
     use super::*;
 
-    fn new_state(
-        tag: usize,
-        transitions: Vec<(u8, u8, usize)>,
-    ) -> char_nfa::State {
+    fn new_state(tag: usize, transitions: Vec<(u8, u8, usize)>) -> char_nfa::State {
         char_nfa::State {
             tags: OrderedIxs(vec![tag]),
-            transitions: transitions.into_iter().map(|(a, b, q)|
-                (Guard::from_range((a, b)), q)
-            ).collect(),
+            transitions: transitions
+                .into_iter()
+                .map(|(a, b, q)| (Guard::from_range((a, b)), q))
+                .collect(),
             is_deterministic: false,
         }
     }

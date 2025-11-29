@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use super::{
-    Build, BuildCursor, Reserve, UnsafeIterator, get_behind_struct, align_up, align_up_ptr,
+    align_up, align_up_ptr, get_behind_struct, Build, BuildCursor, Reserve, UnsafeIterator,
 };
 
 #[repr(C)]
@@ -40,11 +40,15 @@ impl<'a, X> BlobVec<'a, X> {
         std::slice::from_raw_parts(get_behind_struct::<_, X>(self), self.len)
     }
 
-    pub unsafe fn deserialize<F: FnMut(&mut X), After>
-    (cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
-    {
+    pub unsafe fn deserialize<F: FnMut(&mut X), After>(
+        cur: BuildCursor<Self>,
+        mut f: F,
+    ) -> BuildCursor<After> {
         let mut xcur = cur.behind(1);
-        for _ in 0..(*cur.get_mut()).len { f(&mut *xcur.get_mut()); xcur.inc(); }
+        for _ in 0..(*cur.get_mut()).len {
+            f(&mut *xcur.get_mut());
+            xcur.inc();
+        }
         xcur.align()
     }
 }
@@ -62,12 +66,17 @@ impl<'a, X: Build> BlobVec<'a, X> {
         align_up(my_addr + size_of::<Self>(), align_of::<X>()) + size_of::<X>() * ix
     }
 
-    pub unsafe fn serialize<F: FnMut(&X::Origin, &mut X), After>
-    (origin: &<Self as Build>::Origin, cur: BuildCursor<Self>, mut f: F) -> BuildCursor<After>
-    {
+    pub unsafe fn serialize<F: FnMut(&X::Origin, &mut X), After>(
+        origin: &<Self as Build>::Origin,
+        cur: BuildCursor<Self>,
+        mut f: F,
+    ) -> BuildCursor<After> {
         (*cur.get_mut()).len = origin.len();
         let mut xcur = cur.behind(1);
-        for x in origin.iter() { f(x, &mut *xcur.get_mut()); xcur.inc(); }
+        for x in origin.iter() {
+            f(x, &mut *xcur.get_mut());
+            xcur.inc();
+        }
         xcur.align()
     }
 }

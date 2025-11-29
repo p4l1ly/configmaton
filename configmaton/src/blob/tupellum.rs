@@ -5,18 +5,19 @@ use super::{Build, BuildCursor, Reserve};
 #[repr(C)]
 pub struct Tupellum<'a, A, B> {
     pub a: A,
-    _phantom: PhantomData<&'a B>
+    _phantom: PhantomData<&'a B>,
 }
 
 impl<'a, A, B> Tupellum<'a, A, B> {
-    pub unsafe fn deserialize
-    <
+    pub unsafe fn deserialize<
         After,
         FK: FnMut(BuildCursor<A>) -> BuildCursor<B>,
         FV: FnMut(BuildCursor<B>) -> BuildCursor<After>,
-    >
-    (cur: BuildCursor<Self>, mut fk: FK, mut fv: FV) -> BuildCursor<After>
-    {
+    >(
+        cur: BuildCursor<Self>,
+        mut fk: FK,
+        mut fv: FV,
+    ) -> BuildCursor<After> {
         let vcur = fk(cur.transmute());
         fv(vcur)
     }
@@ -28,13 +29,21 @@ pub trait TupellumBuild<A, B> {
 }
 
 impl<A, B> TupellumBuild<A, B> for (A, B) {
-    fn left(&self) -> &A { &self.0 }
-    fn right(&self) -> &B { &self.1 }
+    fn left(&self) -> &A {
+        &self.0
+    }
+    fn right(&self) -> &B {
+        &self.1
+    }
 }
 
 impl<'a, A, B> TupellumBuild<A, B> for (&'a A, &'a B) {
-    fn left(&self) -> &A { self.0 }
-    fn right(&self) -> &B { self.1 }
+    fn left(&self) -> &A {
+        self.0
+    }
+    fn right(&self) -> &B {
+        self.1
+    }
 }
 
 impl<'a, A: Build, B: Build> Build for Tupellum<'a, A, B> {
@@ -48,9 +57,12 @@ impl<'a, A, B> Tupellum<'a, A, B> {
         Bld: TupellumBuild<BldA, BldB>,
         FK: FnMut(&BldA, &mut Reserve),
         FV: FnMut(&BldB, &mut Reserve),
-    >
-    (origin: &Bld, sz: &mut Reserve, mut fk: FK, mut fv: FV) -> usize
-    {
+    >(
+        origin: &Bld,
+        sz: &mut Reserve,
+        mut fk: FK,
+        mut fv: FV,
+    ) -> usize {
         sz.add::<Self>(0);
         let my_addr = sz.0;
         fk(origin.left(), sz);
@@ -58,18 +70,19 @@ impl<'a, A, B> Tupellum<'a, A, B> {
         my_addr
     }
 
-    pub unsafe fn serialize
-    <
+    pub unsafe fn serialize<
         After,
         BldA,
         BldB,
         Bld: TupellumBuild<BldA, BldB>,
         FK: FnMut(&BldA, BuildCursor<A>) -> BuildCursor<B>,
         FV: FnMut(&BldB, BuildCursor<B>) -> BuildCursor<After>,
-    >
-    (origin: &Bld, cur: BuildCursor<Self>, mut fk: FK, mut fv: FV)
-    -> BuildCursor<After>
-    {
+    >(
+        origin: &Bld,
+        cur: BuildCursor<Self>,
+        mut fk: FK,
+        mut fv: FV,
+    ) -> BuildCursor<After> {
         let vcur = fk(origin.left(), cur.transmute());
         fv(origin.right(), vcur)
     }

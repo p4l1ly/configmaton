@@ -1,3 +1,35 @@
+[project]
+name = "configmaton"
+version = "0.1.0"
+description = "Python bindings for configmaton - a configuration automaton library"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=24.0.0",
+    "pre-commit>=3.0.0",
+]
+
 [build-system]
-requires = ["setuptools", "wheel", "Cython"]
+requires = ["setuptools>=65", "wheel", "Cython>=3.0.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["configmaton"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+configmaton = ["*.pxd", "*.so", "*.dylib", "*.dll"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "-v",
+    "--tb=short",
+]
