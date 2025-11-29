@@ -12,12 +12,21 @@ repos:
       - id: cargo-check
         args: ['--all-features']
 
-  # Python formatting
+  # Python formatting and testing
   - repo: https://github.com/psf/black
     rev: 24.10.0
     hooks:
       - id: black
         files: ^python/
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: bash -c 'cd python && uv run pytest tests/ -v'
+        language: system
+        pass_filenames: false
+        files: ^python/(tests/|configmaton/)
 
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks

@@ -121,5 +121,6 @@ Hooks include:
 - Rust formatting (`cargo fmt`)
 - Rust compilation check (`cargo check`)
 - Python formatting (Black)
+- Python tests (pytest)
 - Trailing whitespace, end-of-file fixes
 - YAML/TOML validation

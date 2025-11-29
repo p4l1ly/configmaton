@@ -32,16 +32,13 @@ impl<'a, const SIZE: usize, V: Build> ArrMap<'a, SIZE, V> {
         cur: BuildCursor<Self>,
         mut fv: FV,
     ) -> BuildCursor<After> {
-        let mut i = 0;
         let slf = &mut *cur.get_mut();
         let mut vcur = cur.behind::<V>(1);
-        origin.each_ref().map(|v| {
+        for (i, v) in origin.each_ref().iter().enumerate() {
             slf.arr[i] = vcur.cur as *const V;
             vcur = fv(v, vcur.clone());
-            i += 1;
-        });
-        let r = vcur.align();
-        r
+        }
+        vcur.align()
     }
 }
 
@@ -55,7 +52,9 @@ impl<'a, const SIZE: usize, V> ArrMap<'a, SIZE, V> {
         mut fv: FV,
     ) -> BuildCursor<After> {
         let shifter = Shifter(cur.buf);
-        (*cur.get_mut()).arr.each_mut().map(|v| shifter.shift(v));
+        for v in (*cur.get_mut()).arr.each_mut().iter_mut() {
+            shifter.shift(v);
+        }
         let mut vcur = cur.behind(1);
         for _ in 0..SIZE {
             vcur = fv(vcur);

@@ -59,17 +59,21 @@ value = c.get(b"key")
 
 ## Running Tests
 
+Run all tests with pytest:
+
 ```bash
-# Generate binary automaton and run test
-../target/release/configmaton-cli --output /tmp/simple.bin < tests/simple.json
-cat /tmp/simple.bin | uv run python tests/test_basic.py
+uv run pytest tests/ -v
 ```
 
-Or use the convenience script:
+Or use the convenience script (builds Rust, rebuilds Python extension, runs tests):
 
 ```bash
 ./dev.sh
 ```
+
+The tests include:
+- **test_basic.py**: Basic automaton functionality and value get/set
+- **test_kitchen.py**: Comprehensive hierarchical configuration with recursive updates
 
 ## Configuration Format
 

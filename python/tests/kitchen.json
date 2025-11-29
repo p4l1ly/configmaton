@@ -47,9 +47,9 @@
                         "run": [ "amount flour 350 g" ]
                     }
                 ]
-            },
+            }
         ]
-    }
+    },
     {
         "when": { "recipe": "pizza" },
         "run": [

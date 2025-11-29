@@ -13,9 +13,7 @@ cp ../target/release/libconfigmaton_ffi.so configmaton/
 
 echo ""
 echo "=== Running tests ==="
-echo "Test: test_basic.py with simple.json"
-../target/release/configmaton-cli --output /tmp/simple.bin < tests/simple.json
-cat /tmp/simple.bin | uv run python tests/test_basic.py
+uv run pytest tests/ -v
 
 echo ""
 echo "✓ All done!"
