@@ -11,6 +11,16 @@
 //! - **Composability**: Complex structures can be built from simpler ones automatically
 //! - **Flexibility**: Can override defaults when custom behavior is needed
 //! - **Zero overhead**: All traits should compile to the same machine code as manual implementation
+//!
+//! # Note on `Sized` Bounds
+//!
+//! All traits require `Sized` because:
+//! - Blob structures have fixed-size headers (e.g., `BlobVec` is just `usize` + phantom)
+//! - Variable-length content follows the header, accessed via methods like `behind()`
+//! - We need `size_of::<Self>()` for the header during serialization
+//!
+//! The blob system supports variable-length data, but the header structures themselves
+//! are always sized.
 
 use super::{Build, BuildCursor, Reserve};
 
