@@ -21,13 +21,13 @@
 //! ```
 
 // Core data structures (migrated to ancha system)
+pub mod vec;
 // pub mod arrmap;
 // pub mod bdd;
 // pub mod hashmap;
 // pub mod list;
 // pub mod sediment;
 // pub mod tupellum;
-pub mod vec;
 // pub mod vecmap;
 
 // TODO: Migrate these from blob
@@ -58,6 +58,7 @@ pub use hashbrown::HashMap;
 pub trait Anchize<'a> {
     /// The origin type (pre-serialization)
     type Origin;
+    type Context;
 
     /// The ancha type family (blob, parameterized by lifetime)
     ///
@@ -67,9 +68,7 @@ pub trait Anchize<'a> {
     type Ancha: Sized;
 
     /// Reserve space for the blob.
-    ///
-    /// Returns the address where the structure will be placed.
-    fn reserve(&self, origin: &Self::Origin, sz: &mut Reserve) -> usize;
+    fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve);
 
     /// Serialize the origin into the blob.
     ///
@@ -80,6 +79,7 @@ pub trait Anchize<'a> {
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
+        context: &Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After>;
 }
@@ -105,12 +105,23 @@ pub trait Deanchize<'a> {
 pub trait StaticAnchize<'a> {
     /// The origin type
     type Origin;
+    type Context;
 
     /// The ancha type (no lifetime needed for fixed-size types)
     type Ancha: Sized;
 
     /// Serialize by mutating the ancha in place.
-    fn anchize_static(&self, origin: &Self::Origin, ancha: &mut Self::Ancha);
+    fn anchize_static(
+        &self,
+        origin: &Self::Origin,
+        context: &Self::Context,
+        ancha: &mut Self::Ancha,
+    );
+}
+
+pub trait StaticDeanchize<'a> {
+    type Ancha: Sized;
+    fn deanchize_static(&self, ancha: &mut Self::Ancha);
 }
 
 // ============================================================================
@@ -235,29 +246,50 @@ pub unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
 // ============================================================================
 
 /// Direct copy: the default anchization for Copy types.
-pub struct DirectCopy<'a, T>(std::marker::PhantomData<&'a T>);
+pub struct CopyAnchize<'a, T, Ctx>(std::marker::PhantomData<&'a (T, Ctx)>);
 
-impl<'a, T> DirectCopy<'a, T> {
+impl<'a, T, Ctx> CopyAnchize<'a, T, Ctx> {
     pub fn new() -> Self {
-        DirectCopy(std::marker::PhantomData)
+        CopyAnchize(std::marker::PhantomData)
     }
 }
 
-impl<'a, T> Default for DirectCopy<'a, T> {
+impl<'a, T, Ctx> Default for CopyAnchize<'a, T, Ctx> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a, T: Copy> StaticAnchize<'a> for DirectCopy<'a, T> {
+impl<'a, T: Copy, Ctx> StaticAnchize<'a> for CopyAnchize<'a, T, Ctx> {
     type Origin = T;
     type Ancha = T;
+    type Context = Ctx;
 
-    fn anchize_static(&self, origin: &Self::Origin, ancha: &mut Self::Ancha) {
+    fn anchize_static(
+        &self,
+        origin: &Self::Origin,
+        _context: &Self::Context,
+        ancha: &mut Self::Ancha,
+    ) {
         *ancha = *origin;
     }
 }
 
-// Convenient type aliases
-pub type U8Ancha<'a> = DirectCopy<'a, u8>;
-pub type UsizeAncha<'a> = DirectCopy<'a, usize>;
+pub struct NoopDeanchize<'a, T>(std::marker::PhantomData<&'a T>);
+
+impl<'a, T> NoopDeanchize<'a, T> {
+    pub fn new() -> Self {
+        NoopDeanchize(std::marker::PhantomData)
+    }
+}
+
+impl<'a, T> Default for NoopDeanchize<'a, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a, T> StaticDeanchize<'a> for NoopDeanchize<'a, T> {
+    type Ancha = T;
+    fn deanchize_static(&self, _ancha: &mut Self::Ancha) {}
+}

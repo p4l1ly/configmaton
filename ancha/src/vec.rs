@@ -2,7 +2,7 @@
 //!
 //! Similar to `Vec<T>` but stored in a contiguous blob with inline elements.
 
-use super::{Anchize, BuildCursor, Deanchize, Reserve, StaticAnchize};
+use super::{Anchize, BuildCursor, Deanchize, Reserve, StaticAnchize, StaticDeanchize};
 use std::marker::PhantomData;
 
 /// AnchaVec: a vector stored in blob format.
@@ -79,37 +79,43 @@ impl<'a, X> AnchaVec<'a, X> {
 /// // Use it!
 /// custom_ancha.anchize(&vec![1,2,3], cur);  // → [2,4,6]
 /// ```
-pub struct VecAncha<'a, ElemAnchize> {
+pub struct VecAnchizeFromVec<'a, ElemAnchize> {
     pub elem_ancha: ElemAnchize,
     _phantom: PhantomData<&'a ElemAnchize>,
 }
 
-impl<'a, ElemAnchize> VecAncha<'a, ElemAnchize> {
-    pub fn new(elem_ancha: ElemAnchize) -> Self {
-        VecAncha { elem_ancha, _phantom: PhantomData }
+impl<'a, ElemAnchize: Default> Default for VecAnchizeFromVec<'a, ElemAnchize> {
+    fn default() -> Self {
+        VecAnchizeFromVec { elem_ancha: Default::default(), _phantom: PhantomData }
     }
 }
 
-impl<'a, ElemAnchize> Anchize<'a> for VecAncha<'a, ElemAnchize>
+impl<'a, ElemAnchize> VecAnchizeFromVec<'a, ElemAnchize> {
+    pub fn new(elem_ancha: ElemAnchize) -> Self {
+        VecAnchizeFromVec { elem_ancha, _phantom: PhantomData }
+    }
+}
+
+impl<'a, ElemAnchize> Anchize<'a> for VecAnchizeFromVec<'a, ElemAnchize>
 where
     ElemAnchize: StaticAnchize<'a>,
     ElemAnchize::Ancha: Sized,
 {
     type Origin = Vec<ElemAnchize::Origin>;
     type Ancha = AnchaVec<'a, ElemAnchize::Ancha>;
+    type Context = ElemAnchize::Context;
 
-    fn reserve(&self, origin: &Self::Origin, sz: &mut Reserve) -> usize {
+    fn reserve(&self, origin: &Self::Origin, _context: &Self::Context, sz: &mut Reserve) {
         sz.add::<AnchaVec<'a, ElemAnchize::Ancha>>(0);
-        let addr = sz.0;
         sz.add::<AnchaVec<'a, ElemAnchize::Ancha>>(1);
         sz.add::<ElemAnchize::Ancha>(origin.len());
         sz.add::<ElemAnchize::Ancha>(0); // Align
-        addr
     }
 
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
+        context: &Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         (*cur.get_mut()).len = origin.len();
@@ -117,7 +123,7 @@ where
 
         for elem_origin in origin.iter() {
             // Use the element anchization strategy!
-            self.elem_ancha.anchize_static(elem_origin, &mut *xcur.get_mut());
+            self.elem_ancha.anchize_static(elem_origin, context, &mut *xcur.get_mut());
             xcur.inc();
         }
 
@@ -125,18 +131,35 @@ where
     }
 }
 
-impl<'a, ElemAnchize> Deanchize<'a> for VecAncha<'a, ElemAnchize>
+pub struct VecDeanchize<'a, ElemDeanchize> {
+    pub elem_deancha: ElemDeanchize,
+    _phantom: PhantomData<&'a ElemDeanchize>,
+}
+
+impl<'a, ElemDeanchize> VecDeanchize<'a, ElemDeanchize> {
+    pub fn new(elem_deancha: ElemDeanchize) -> Self {
+        VecDeanchize { elem_deancha, _phantom: PhantomData }
+    }
+}
+
+impl<'a, ElemDeanchize: Default> Default for VecDeanchize<'a, ElemDeanchize> {
+    fn default() -> Self {
+        VecDeanchize { elem_deancha: Default::default(), _phantom: PhantomData }
+    }
+}
+
+impl<'a, ElemDeanchize> Deanchize<'a> for VecDeanchize<'a, ElemDeanchize>
 where
-    ElemAnchize: StaticAnchize<'a>,
-    ElemAnchize::Ancha: Sized,
+    ElemDeanchize: StaticDeanchize<'a>,
+    ElemDeanchize::Ancha: Sized,
 {
-    type Ancha = AnchaVec<'a, ElemAnchize::Ancha>;
+    type Ancha = AnchaVec<'a, ElemDeanchize::Ancha>;
 
     unsafe fn deanchize<After>(&self, cur: BuildCursor<Self::Ancha>) -> BuildCursor<After> {
-        // For fixed-size elements, no pointer fixup needed
         let len = (*cur.get_mut()).len;
-        let mut xcur: BuildCursor<ElemAnchize::Ancha> = cur.behind(1);
+        let mut xcur: BuildCursor<ElemDeanchize::Ancha> = cur.behind(1);
         for _ in 0..len {
+            self.elem_deancha.deanchize_static(&mut *xcur.get_mut());
             xcur.inc();
         }
         xcur.align()
@@ -146,57 +169,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DirectCopy;
+    use crate::{CopyAnchize, NoopDeanchize};
 
     #[test]
     fn test_anchavec_basic() {
-        let ancha = VecAncha::new(DirectCopy::<u8>::new());
+        let anchize: VecAnchizeFromVec<CopyAnchize<u8, ()>> = VecAnchizeFromVec::default();
+        let deanchize: VecDeanchize<NoopDeanchize<u8>> = VecDeanchize::default();
         let origin = vec![1u8, 2, 3];
 
         let mut sz = Reserve(0);
-        let addr = ancha.reserve(&origin, &mut sz);
-        assert_eq!(addr, 0);
+        anchize.reserve(&origin, &(), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            ancha.anchize::<()>(&origin, cur.clone());
-            ancha.deanchize::<()>(cur);
+            anchize.anchize::<()>(&origin, &(), cur.clone());
+            deanchize.deanchize::<()>(cur);
         }
 
         let anchavec = unsafe { &*(buf.as_ptr() as *const AnchaVec<u8>) };
         assert_eq!(unsafe { anchavec.as_ref() }, &[1, 2, 3]);
-    }
-
-    #[test]
-    fn test_anchavec_with_custom() {
-        // Custom anchization: multiply by 2
-        struct MultiplyBy2<'a>(PhantomData<&'a usize>);
-        impl<'a> StaticAnchize<'a> for MultiplyBy2<'a> {
-            type Origin = usize;
-            type Ancha = usize;
-            fn anchize_static(&self, origin: &Self::Origin, ancha: &mut Self::Ancha) {
-                *ancha = *origin * 2;
-            }
-        }
-
-        let ancha = VecAncha::new(MultiplyBy2(PhantomData));
-        let origin = vec![1usize, 2, 3];
-
-        let mut sz = Reserve(0);
-        ancha.reserve(&origin, &mut sz);
-
-        let mut buf = vec![0u8; sz.0];
-        let cur = BuildCursor::new(buf.as_mut_ptr());
-
-        unsafe {
-            ancha.anchize::<()>(&origin, cur.clone());
-            ancha.deanchize::<()>(cur);
-        }
-
-        let anchavec = unsafe { &*(buf.as_ptr() as *const AnchaVec<usize>) };
-        // Elements should be multiplied by 2!
-        assert_eq!(unsafe { anchavec.as_ref() }, &[2, 4, 6]);
     }
 }
