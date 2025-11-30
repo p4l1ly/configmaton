@@ -21,14 +21,14 @@
 //! ```
 
 // Core data structures (migrated to ancha system)
-pub mod arrmap;
-pub mod bdd;
-pub mod hashmap;
-pub mod list;
-pub mod sediment;
-pub mod tupellum;
+// pub mod arrmap;
+// pub mod bdd;
+// pub mod hashmap;
+// pub mod list;
+// pub mod sediment;
+// pub mod tupellum;
 pub mod vec;
-pub mod vecmap;
+// pub mod vecmap;
 
 // TODO: Migrate these from blob
 // pub mod arrmap;
@@ -55,7 +55,7 @@ pub use hashbrown::HashMap;
 ///
 /// This trait defines how to convert an origin representation into
 /// a serialized blob representation.
-pub trait Anchize {
+pub trait Anchize<'a> {
     /// The origin type (pre-serialization)
     type Origin;
 
@@ -64,9 +64,7 @@ pub trait Anchize {
     /// For example: `Ancha<'a> = AnchaVec<'a, u8>`
     ///
     /// Note: The lifetime 'a is the lifetime of the blob itself.
-    type Ancha<'a>: Sized
-    where
-        Self: 'a;
+    type Ancha: Sized;
 
     /// Reserve space for the blob.
     ///
@@ -79,40 +77,37 @@ pub trait Anchize {
     ///
     /// - `cur` must point to valid, allocated memory
     /// - Buffer must have sufficient space (as computed by `reserve`)
-    unsafe fn anchize<'a, After>(
+    unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        cur: BuildCursor<Self::Ancha<'a>>,
+        cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After>;
 }
 
 /// Deanchization: pointer fixup in the blob (deserialization).
 ///
 /// This is origin-agnostic - it just fixes up pointers in place.
-pub trait Deanchize {
+pub trait Deanchize<'a> {
     /// The ancha type family (blob, parameterized by lifetime)
-    type Ancha<'a>: Sized
-    where
-        Self: 'a;
+    type Ancha: Sized;
 
     /// Fix up pointers in the blob.
     ///
     /// # Safety
     ///
     /// - `cur` must point to a properly initialized structure
-    unsafe fn deanchize<'a, After>(&self, cur: BuildCursor<Self::Ancha<'a>>)
-        -> BuildCursor<After>;
+    unsafe fn deanchize<After>(&self, cur: BuildCursor<Self::Ancha>) -> BuildCursor<After>;
 }
 
 /// Static anchization: for fixed-size types that can be mutated in place.
 ///
 /// Examples: primitives (u8, usize), fixed-size structs
-pub trait StaticAnchize {
+pub trait StaticAnchize<'a> {
     /// The origin type
     type Origin;
 
     /// The ancha type (no lifetime needed for fixed-size types)
-    type Ancha;
+    type Ancha: Sized;
 
     /// Serialize by mutating the ancha in place.
     fn anchize_static(&self, origin: &Self::Origin, ancha: &mut Self::Ancha);
@@ -240,21 +235,21 @@ pub unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
 // ============================================================================
 
 /// Direct copy: the default anchization for Copy types.
-pub struct DirectCopy<T>(std::marker::PhantomData<T>);
+pub struct DirectCopy<'a, T>(std::marker::PhantomData<&'a T>);
 
-impl<T> DirectCopy<T> {
+impl<'a, T> DirectCopy<'a, T> {
     pub fn new() -> Self {
         DirectCopy(std::marker::PhantomData)
     }
 }
 
-impl<T> Default for DirectCopy<T> {
+impl<'a, T> Default for DirectCopy<'a, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Copy> StaticAnchize for DirectCopy<T> {
+impl<'a, T: Copy> StaticAnchize<'a> for DirectCopy<'a, T> {
     type Origin = T;
     type Ancha = T;
 
@@ -263,65 +258,6 @@ impl<T: Copy> StaticAnchize for DirectCopy<T> {
     }
 }
 
-// ============================================================================
-// StaticToDynamic: Adapter for lazy usage (use sparingly!)
-// ============================================================================
-
-/// Adapter to lift StaticAnchize into Anchize/Deanchize.
-///
-/// **Use sparingly!** This is for cases where you're too lazy to create
-/// a proper data structure. In most cases, you should use:
-/// - `Vec` for arrays of fixed-size elements
-/// - Not `Sediment`/`List`/`Tupellum` with primitives
-pub struct StaticToDynamic<S>(pub S);
-
-impl<S> StaticToDynamic<S> {
-    pub fn new(inner: S) -> Self {
-        StaticToDynamic(inner)
-    }
-}
-
-impl<S> Anchize for StaticToDynamic<S>
-where
-    S: StaticAnchize + 'static,
-    S::Ancha: Copy,
-{
-    type Origin = S::Origin;
-    type Ancha<'a> = S::Ancha;
-
-    fn reserve(&self, _origin: &Self::Origin, sz: &mut Reserve) -> usize {
-        sz.add::<S::Ancha>(0);
-        let addr = sz.0;
-        sz.add::<S::Ancha>(1);
-        addr
-    }
-
-    unsafe fn anchize<'a, After>(
-        &self,
-        origin: &Self::Origin,
-        cur: BuildCursor<Self::Ancha<'a>>,
-    ) -> BuildCursor<After> {
-        self.0.anchize_static(origin, cur.get_mut());
-        cur.behind(1)
-    }
-}
-
-impl<S> Deanchize for StaticToDynamic<S>
-where
-    S: StaticAnchize + 'static,
-    S::Ancha: Copy,
-{
-    type Ancha<'a> = S::Ancha;
-
-    unsafe fn deanchize<'a, After>(
-        &self,
-        cur: BuildCursor<Self::Ancha<'a>>,
-    ) -> BuildCursor<After> {
-        // No fixup needed for primitives
-        cur.behind(1)
-    }
-}
-
 // Convenient type aliases
-pub type U8Ancha = DirectCopy<u8>;
-pub type UsizeAncha = DirectCopy<usize>;
+pub type U8Ancha<'a> = DirectCopy<'a, u8>;
+pub type UsizeAncha<'a> = DirectCopy<'a, usize>;

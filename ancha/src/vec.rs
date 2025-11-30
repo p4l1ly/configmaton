@@ -79,37 +79,38 @@ impl<'a, X> AnchaVec<'a, X> {
 /// // Use it!
 /// custom_ancha.anchize(&vec![1,2,3], cur);  // → [2,4,6]
 /// ```
-pub struct VecAncha<ElemAnchize> {
+pub struct VecAncha<'a, ElemAnchize> {
     pub elem_ancha: ElemAnchize,
+    _phantom: PhantomData<&'a ElemAnchize>,
 }
 
-impl<ElemAnchize> VecAncha<ElemAnchize> {
+impl<'a, ElemAnchize> VecAncha<'a, ElemAnchize> {
     pub fn new(elem_ancha: ElemAnchize) -> Self {
-        VecAncha { elem_ancha }
+        VecAncha { elem_ancha, _phantom: PhantomData }
     }
 }
 
-impl<ElemAnchize> Anchize for VecAncha<ElemAnchize>
+impl<'a, ElemAnchize> Anchize<'a> for VecAncha<'a, ElemAnchize>
 where
-    ElemAnchize: StaticAnchize + 'static,
-    ElemAnchize::Ancha: Sized + 'static,
+    ElemAnchize: StaticAnchize<'a>,
+    ElemAnchize::Ancha: Sized,
 {
     type Origin = Vec<ElemAnchize::Origin>;
-    type Ancha<'a> = AnchaVec<'a, ElemAnchize::Ancha>;
+    type Ancha = AnchaVec<'a, ElemAnchize::Ancha>;
 
     fn reserve(&self, origin: &Self::Origin, sz: &mut Reserve) -> usize {
-        sz.add::<AnchaVec<ElemAnchize::Ancha>>(0);
+        sz.add::<AnchaVec<'a, ElemAnchize::Ancha>>(0);
         let addr = sz.0;
-        sz.add::<AnchaVec<ElemAnchize::Ancha>>(1);
+        sz.add::<AnchaVec<'a, ElemAnchize::Ancha>>(1);
         sz.add::<ElemAnchize::Ancha>(origin.len());
         sz.add::<ElemAnchize::Ancha>(0); // Align
         addr
     }
 
-    unsafe fn anchize<'a, After>(
+    unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        cur: BuildCursor<Self::Ancha<'a>>,
+        cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         (*cur.get_mut()).len = origin.len();
         let mut xcur: BuildCursor<ElemAnchize::Ancha> = cur.behind(1);
@@ -124,17 +125,14 @@ where
     }
 }
 
-impl<ElemAnchize> Deanchize for VecAncha<ElemAnchize>
+impl<'a, ElemAnchize> Deanchize<'a> for VecAncha<'a, ElemAnchize>
 where
-    ElemAnchize: StaticAnchize + 'static,
-    ElemAnchize::Ancha: Sized + 'static,
+    ElemAnchize: StaticAnchize<'a>,
+    ElemAnchize::Ancha: Sized,
 {
-    type Ancha<'a> = AnchaVec<'a, ElemAnchize::Ancha>;
+    type Ancha = AnchaVec<'a, ElemAnchize::Ancha>;
 
-    unsafe fn deanchize<'a, After>(
-        &self,
-        cur: BuildCursor<Self::Ancha<'a>>,
-    ) -> BuildCursor<After> {
+    unsafe fn deanchize<After>(&self, cur: BuildCursor<Self::Ancha>) -> BuildCursor<After> {
         // For fixed-size elements, no pointer fixup needed
         let len = (*cur.get_mut()).len;
         let mut xcur: BuildCursor<ElemAnchize::Ancha> = cur.behind(1);
@@ -174,8 +172,8 @@ mod tests {
     #[test]
     fn test_anchavec_with_custom() {
         // Custom anchization: multiply by 2
-        struct MultiplyBy2;
-        impl StaticAnchize for MultiplyBy2 {
+        struct MultiplyBy2<'a>(PhantomData<&'a usize>);
+        impl<'a> StaticAnchize<'a> for MultiplyBy2<'a> {
             type Origin = usize;
             type Ancha = usize;
             fn anchize_static(&self, origin: &Self::Origin, ancha: &mut Self::Ancha) {
@@ -183,7 +181,7 @@ mod tests {
             }
         }
 
-        let ancha = VecAncha::new(MultiplyBy2);
+        let ancha = VecAncha::new(MultiplyBy2(PhantomData));
         let origin = vec![1usize, 2, 3];
 
         let mut sz = Reserve(0);
