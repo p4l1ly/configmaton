@@ -66,33 +66,20 @@ impl<'a, X> AnchaVec<'a, X> {
 /// Anchization strategy for AnchaVec with customizable element anchization.
 ///
 /// This is the key to composability: you can plug in ANY element anchization strategy!
-///
-/// # Example
-///
-/// ```ignore
-/// // Default: direct copy
-/// let default_ancha = VecAncha::new(DirectCopy::<u8>::new());
-///
-/// // Custom: multiply elements by 2
-/// let custom_ancha = VecAncha::new(MultiplyBy2);
-///
-/// // Use it!
-/// custom_ancha.anchize(&vec![1,2,3], cur);  // → [2,4,6]
-/// ```
 pub struct VecAnchizeFromVec<'a, ElemAnchize> {
     pub elem_ancha: ElemAnchize,
     _phantom: PhantomData<&'a ElemAnchize>,
 }
 
-impl<'a, ElemAnchize: Default> Default for VecAnchizeFromVec<'a, ElemAnchize> {
-    fn default() -> Self {
-        VecAnchizeFromVec { elem_ancha: Default::default(), _phantom: PhantomData }
-    }
-}
-
 impl<'a, ElemAnchize> VecAnchizeFromVec<'a, ElemAnchize> {
     pub fn new(elem_ancha: ElemAnchize) -> Self {
         VecAnchizeFromVec { elem_ancha, _phantom: PhantomData }
+    }
+}
+
+impl<'a, ElemAnchize: Default> Default for VecAnchizeFromVec<'a, ElemAnchize> {
+    fn default() -> Self {
+        VecAnchizeFromVec { elem_ancha: Default::default(), _phantom: PhantomData }
     }
 }
 
@@ -106,10 +93,9 @@ where
     type Context = ElemAnchize::Context;
 
     fn reserve(&self, origin: &Self::Origin, _context: &Self::Context, sz: &mut Reserve) {
-        sz.add::<AnchaVec<'a, ElemAnchize::Ancha>>(0);
-        sz.add::<AnchaVec<'a, ElemAnchize::Ancha>>(1);
+        sz.add::<Self::Ancha>(0);
+        sz.add::<Self::Ancha>(1);
         sz.add::<ElemAnchize::Ancha>(origin.len());
-        sz.add::<ElemAnchize::Ancha>(0); // Align
     }
 
     unsafe fn anchize<After>(
@@ -118,6 +104,7 @@ where
         context: &Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
+        let cur: BuildCursor<Self::Ancha> = cur.align();
         (*cur.get_mut()).len = origin.len();
         let mut xcur: BuildCursor<ElemAnchize::Ancha> = cur.behind(1);
 
@@ -126,8 +113,7 @@ where
             self.elem_ancha.anchize_static(elem_origin, context, &mut *xcur.get_mut());
             xcur.inc();
         }
-
-        xcur.align()
+        xcur.transmute()
     }
 }
 
@@ -156,13 +142,14 @@ where
     type Ancha = AnchaVec<'a, ElemDeanchize::Ancha>;
 
     unsafe fn deanchize<After>(&self, cur: BuildCursor<Self::Ancha>) -> BuildCursor<After> {
+        let cur: BuildCursor<Self::Ancha> = cur.align();
         let len = (*cur.get_mut()).len;
         let mut xcur: BuildCursor<ElemDeanchize::Ancha> = cur.behind(1);
         for _ in 0..len {
             self.elem_deancha.deanchize_static(&mut *xcur.get_mut());
             xcur.inc();
         }
-        xcur.align()
+        xcur.transmute()
     }
 }
 

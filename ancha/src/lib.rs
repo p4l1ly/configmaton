@@ -5,29 +5,15 @@
 //! # Core Concept
 //!
 //! Serialization strategies are **composable objects** with customizable defaults:
-//!
-//! ```ignore
-//! // Default: direct copy
-//! let default = DirectCopy::<usize>::new();
-//!
-//! // Custom: multiply by 2
-//! let custom = MultiplyBy2;
-//!
-//! // Compose into vector
-//! let vec_ancha = VecAncha::new(custom);
-//!
-//! // Serialize with custom strategy
-//! vec_ancha.anchize(&vec![1,2,3], cur);  // → [2,4,6]
-//! ```
 
 // Core data structures (migrated to ancha system)
+pub mod tupellum;
 pub mod vec;
 // pub mod arrmap;
 // pub mod bdd;
 // pub mod hashmap;
 // pub mod list;
 // pub mod sediment;
-// pub mod tupellum;
 // pub mod vecmap;
 
 // TODO: Migrate these from blob
@@ -39,7 +25,6 @@ pub mod vec;
 // pub mod keyval_state;
 // pub mod listmap;
 // pub mod state;
-// pub mod tupellum;
 // pub mod vecmap;
 
 use std::mem::{align_of, size_of};
