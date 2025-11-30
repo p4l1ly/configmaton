@@ -6,10 +6,11 @@ This document provides a detailed, step-by-step guide for migrating data structu
 
 1. [Overview](#overview)
 2. [Key Differences](#key-differences)
-3. [Transformation Steps](#transformation-steps)
-4. [Test Migration](#test-migration)
-5. [Alignment Unification](#alignment-unification)
-6. [Examples](#examples)
+3. [**CRITICAL: Alignment Strategy Difference**](#critical-alignment-strategy-difference)
+4. [Transformation Steps](#transformation-steps)
+5. [Test Migration](#test-migration)
+6. [Alignment Unification](#alignment-unification)
+7. [Examples](#examples)
 
 ---
 
@@ -114,6 +115,174 @@ unsafe fn anchize<After>(
     cur: BuildCursor<Self::Ancha>,
 ) -> BuildCursor<After>
 ```
+
+---
+
+## CRITICAL: Alignment Strategy Difference
+
+**⚠️ THIS IS THE MOST IMPORTANT CONCEPTUAL DIFFERENCE BETWEEN BLOB AND ANCHA ⚠️**
+
+### Blob's Alignment Strategy: "Align at the End" (Conservative)
+
+In the blob system, each structure aligns **after** serializing its content:
+
+```rust
+// Blob pattern
+pub unsafe fn serialize<F, After>(
+    origin: &Origin,
+    cur: BuildCursor<Self>,
+    mut f: F,
+) -> BuildCursor<After> {
+    // ... serialize content ...
+    xcur.align()  // ← Align at the END
+}
+```
+
+**Result**: The cursor is **always** aligned after any operation. This is **safer** - you can't accidentally use a misaligned cursor.
+
+### Ancha's Alignment Strategy: "Align at the Beginning" (Efficient)
+
+In the ancha system, each structure aligns **before** processing, especially in loops:
+
+```rust
+// Ancha pattern
+unsafe fn anchize<After>(...) -> BuildCursor<After> {
+    while let Some(origin) = todo.pop() {
+        cur = cur.align::<Self::Ancha>();  // ← Align at the BEGINNING
+        // ... serialize content ...
+    }
+    xcur.transmute()  // ← NO alignment at the end
+}
+```
+
+**Result**: The cursor may **not** be aligned after operations. This allows **tighter packing**.
+
+### Why This Matters: Space Efficiency vs Safety
+
+#### Space Efficiency Benefit
+
+Consider this scenario:
+```rust
+// You have:
+// 1. Sediment with 8-byte aligned elements (e.g., pointers)
+// 2. Followed by a u8
+
+// Blob layout (always align at end):
+// [Sediment header | elem1 | elem2 | align_padding] [u8 | 7_bytes_waste]
+//                                    ← forced 8-byte alignment here
+
+// Ancha layout (align at beginning only when needed):
+// [Sediment header | elem1 | elem2 | u8] [next_structure]
+//                                     ↑ u8 fits in the gap!
+```
+
+In the ancha system, the `u8` can fall **before** the big alignment of the next coarsely-aligned structure. This saves space.
+
+#### Safety Risk
+
+The risk is that if you're not systematic about alignment, you can get:
+- **Misaligned pointer dereferences** (crashes or undefined behavior)
+- **Subtle bugs** where cursors aren't aligned when they should be
+- **Pointer map issues** (like we had in BDD) where stored addresses are misaligned
+
+### The Ancha Discipline: Be Explicit About Alignment
+
+**In Reserve:**
+```rust
+fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve) {
+    sz.add::<Self::Ancha>(0);  // ← Align FIRST (at beginning)
+    // For loop-based structures:
+    while let Some(origin) = todo.pop() {
+        sz.add::<Self::Ancha>(0);  // ← Align BEFORE each iteration
+        sz.add::<Self::Ancha>(1);  // Then add space
+        // ...
+    }
+}
+```
+
+**In Anchize:**
+```rust
+unsafe fn anchize<After>(...) -> BuildCursor<After> {
+    let cur = cur.align();  // ← Align FIRST (at beginning)
+    // For loop-based structures:
+    while let Some(origin) = todo.pop() {
+        cur = cur.align::<Self::Ancha>();  // ← Align BEFORE each iteration
+        ptrmap.insert(origin, cur.cur);     // Store ALIGNED address!
+        // ...
+    }
+    xcur.transmute()  // ← NO alignment at end
+}
+```
+
+**In Deanchize:**
+```rust
+unsafe fn deanchize<After>(&self, cur: BuildCursor<Self::Ancha>) -> BuildCursor<After> {
+    let cur = cur.align();  // ← Align FIRST (at beginning)
+    // For loop-based structures:
+    while todo_count > 0 {
+        cur = cur.align::<Self::Ancha>();  // ← Align BEFORE each iteration
+        // ...
+    }
+    xcur.transmute()  // ← NO alignment at end
+}
+```
+
+### Critical Rules for Ancha Alignment
+
+1. **Always align at the beginning** of reserve/anchize/deanchize
+2. **For loop-based structures**, align BEFORE each iteration
+3. **Never align at the end** of anchize/deanchize (use `transmute()`, not `align()`)
+4. **Exception**: Structures with headers that don't wrap other structures need explicit alignment
+5. **When storing pointers** (like in BDD's ptrmap), ensure you align BEFORE storing the address
+
+### Why Align Before in Loops?
+
+For structures like BDD that use a work queue and store pointers:
+
+```rust
+while let Some(origin) = todo.pop() {
+    cur = cur.align::<Self::Ancha>();  // ← MUST align first!
+    ptrmap.insert(origin, cur.cur);     // ← Store aligned address
+    // ...
+    // In phase 2, we'll use ptrmap addresses as pointers
+    // They MUST be aligned!
+}
+```
+
+If we aligned at the end instead, we'd store **misaligned** addresses in the ptrmap, causing crashes when dereferencing them.
+
+### Migration Checklist: Alignment
+
+When migrating from blob to ancha:
+
+- [ ] **Remove** `xcur.align()` at the end of anchize → change to `xcur.transmute()`
+- [ ] **Remove** `xcur.align()` at the end of deanchize → change to `xcur.transmute()`
+- [ ] **Add** `cur = cur.align()` at the BEGINNING of anchize
+- [ ] **Add** `cur = cur.align()` at the BEGINNING of deanchize
+- [ ] **For loop-based structures**: Add `cur = cur.align::<Self::Ancha>()` BEFORE each iteration
+- [ ] **For loop-based structures**: Add `sz.add::<Self::Ancha>(0)` BEFORE each iteration in reserve
+- [ ] **Test thoroughly** with various data to catch alignment issues
+
+### Red Flags: Signs of Alignment Issues
+
+Watch out for these symptoms:
+- ❌ Misaligned pointer dereference panics
+- ❌ Different behavior between debug and release builds
+- ❌ Crashes with `SIGBUS` or `SIGSEGV`
+- ❌ "address must be a multiple of X" errors
+- ❌ Tests pass individually but fail when run together
+
+### Trade-off Summary
+
+| Aspect | Blob (Align at End) | Ancha (Align at Beginning) |
+|--------|---------------------|----------------------------|
+| **Safety** | ✅ Very safe - cursor always aligned | ⚠️ Requires discipline |
+| **Space Efficiency** | ❌ Can waste space with padding | ✅ Tighter packing possible |
+| **Complexity** | ✅ Simple - automatic alignment | ⚠️ Must be explicit |
+| **Composability** | ❌ Each structure adds alignment | ✅ Flexible composition |
+| **Performance** | ❌ More padding = more cache misses | ✅ Denser data = better cache |
+
+**The ancha approach trades safety for efficiency. We must be systematic and disciplined to avoid alignment bugs.**
 
 ---
 
@@ -311,11 +480,17 @@ where
 **Key transformations:**
 
 1. **Remove `my_addr` return value**: The ancha system doesn't return addresses from reserve
-2. **Add alignment at the beginning**:
-   - In `reserve()`: `sz.add::<Self::Ancha>(0)` as the first line
-   - In `anchize()`: `let cur = cur.align()` as the first line
+
+2. **⚠️ CRITICAL: Change alignment pattern**:
+   - In `reserve()`: Add `sz.add::<Self::Ancha>(0)` as the first line
+   - In `anchize()`: Add `let cur = cur.align()` as the first line
+   - **REMOVE** any `xcur.align()` at the end → change to `xcur.transmute()`
+   - **For loops**: Add alignment BEFORE each iteration (see [Alignment Strategy](#critical-alignment-strategy-difference))
+
 3. **Replace closure `f` with strategy call**: `self.elem_ancha.anchize_static(...)`
+
 4. **Thread context**: Add `context` parameter and pass it through
+
 5. **Rename types**: `X` → `ElemAnchize::Ancha`, `X::Origin` → `ElemAnchize::Origin`
 
 ### Step 5: Create Deanchization Strategy Struct
@@ -386,8 +561,9 @@ where
 **Key transformations:**
 
 1. **Add alignment at the beginning**: `let cur = cur.align()`
-2. **Replace closure `f` with strategy call**: `self.elem_deancha.deanchize_static(...)`
-3. **Store len first**: For safety, read `len` before iterating
+2. **⚠️ REMOVE alignment at the end**: Change `xcur.align()` to `xcur.transmute()`
+3. **Replace closure `f` with strategy call**: `self.elem_deancha.deanchize_static(...)`
+4. **Store len first**: For safety, read `len` before iterating
 
 ---
 
@@ -523,7 +699,9 @@ fn test_tupellum() {
 
 ## Alignment Unification
 
-**Critical rule**: Alignment must be done **exactly once** at the **beginning** of each phase.
+**⚠️ READ [CRITICAL: Alignment Strategy Difference](#critical-alignment-strategy-difference) FIRST!**
+
+**Critical rule**: Alignment must be done **at the beginning** of each phase and at the beginning of each loop iteration.
 
 ### In Reserve Phase
 
@@ -583,7 +761,7 @@ pub struct Tupellum<'a, A, B> {
 ```
 
 For such structures:
-- **Do NOT** add explicit alignment
+- **Do NOT** add explicit alignment at the beginning
 - **Delegate** alignment to the first element's strategy
 - The alignment of `Tupellum<A, B>` equals the alignment of `A`
 
@@ -603,8 +781,11 @@ unsafe fn anchize<After>(...) -> BuildCursor<After> {
 ```
 
 **Rule of thumb:**
-- **Has header fields?** → Align explicitly at the beginning
-- **Only wraps first element?** → Delegate alignment to first element
+- **Has header fields (like len, type_, etc.)?** → Align explicitly at the beginning
+- **Only wraps first element inline?** → Delegate alignment to first element
+- **Uses a work queue/loop?** → Align at the beginning of each iteration
+
+**Note**: The first element's anchize will align at its beginning, which provides the alignment for the whole Tupellum.
 
 ### Common Mistake
 
@@ -931,18 +1112,23 @@ Use this checklist when migrating a structure:
 - [ ] Create anchization strategy struct
 - [ ] Implement `new()` and `Default` for anchization strategy
 - [ ] Implement `Anchize` trait
-  - [ ] Add alignment at beginning of `reserve()`
-  - [ ] Add alignment at beginning of `anchize()`
+  - [ ] Add alignment at beginning of `reserve()`: `sz.add::<Self::Ancha>(0)`
+  - [ ] Add alignment at beginning of `anchize()`: `let cur = cur.align()`
+  - [ ] **⚠️ REMOVE** any `xcur.align()` at the end → use `xcur.transmute()`
+  - [ ] For loop structures: align BEFORE each iteration
   - [ ] Replace closures with strategy calls
   - [ ] Thread context through
 - [ ] Create deanchization strategy struct
 - [ ] Implement `new()` and `Default` for deanchization strategy
 - [ ] Implement `Deanchize` trait
-  - [ ] Add alignment at beginning of `deanchize()`
+  - [ ] Add alignment at beginning of `deanchize()`: `let cur = cur.align()`
+  - [ ] **⚠️ REMOVE** any `xcur.align()` at the end → use `xcur.transmute()`
+  - [ ] For loop structures: align BEFORE each iteration
   - [ ] Replace closures with strategy calls
 - [ ] Find tests in `blob.rs`
 - [ ] Copy tests to new module
 - [ ] Transform tests to use strategy objects
+- [ ] **⚠️ Test with various data sizes** to catch alignment bugs
 - [ ] Verify tests pass
 - [ ] Update imports in other modules
 - [ ] Update documentation
@@ -951,24 +1137,55 @@ Use this checklist when migrating a structure:
 
 ## Common Pitfalls
 
-1. **Forgetting alignment**: Always align at the beginning of reserve/anchize/deanchize
-2. **Wrong closure replacement**: Map `f(x, xcur)` to `self.elem_ancha.anchize_static(x, context, xcur)`
-3. **Missing context**: Thread `context` parameter through all calls
-4. **Type mismatches**: Use `ElemAnchize::Origin` not `X::Origin`
-5. **Test transformation**: Remember to create strategy objects first
-6. **Visibility changes**: Check if field visibility needs adjustment
+1. **⚠️ CRITICAL: Wrong alignment pattern**:
+   - ❌ BAD: Aligning at the end like blob (`xcur.align()`)
+   - ✅ GOOD: Aligning at the beginning and using `xcur.transmute()` at the end
+   - See [CRITICAL: Alignment Strategy Difference](#critical-alignment-strategy-difference)
+
+2. **Forgetting alignment in loops**: For work-queue structures, align BEFORE each iteration
+   - In reserve: `sz.add::<Self::Ancha>(0)` before processing
+   - In anchize: `cur = cur.align::<Self::Ancha>()` before processing
+   - In deanchize: `cur = cur.align::<Self::Ancha>()` before processing
+
+3. **Storing misaligned pointers**: When building pointer maps (like BDD), align BEFORE storing addresses
+
+4. **Wrong closure replacement**: Map `f(x, xcur)` to `self.elem_ancha.anchize_static(x, context, xcur)`
+
+5. **Missing context**: Thread `context` parameter through all calls
+
+6. **Type mismatches**: Use `ElemAnchize::Origin` not `X::Origin`
+
+7. **Test transformation**: Remember to create strategy objects first
+
+8. **Visibility changes**: Check if field visibility needs adjustment
+
+9. **Not testing with misaligned data**: Test with various data sizes to catch alignment bugs early
 
 ---
 
 ## Summary
 
-The migration from blob to ancha is straightforward but requires careful attention to detail:
+The migration from blob to ancha requires careful attention to detail, especially regarding **alignment strategy**:
 
 1. **Rename structures** (Blob→Ancha)
 2. **Create strategy structs** (Anchize and Deanchize)
 3. **Transform methods to traits** (reserve/serialize/deserialize → Anchize/Deanchize)
 4. **Replace closures with strategies** (trait-based composition)
-5. **Align at the beginning** (exactly once per phase)
+5. **⚠️ CRITICAL: Change alignment pattern**:
+   - Remove alignment at the END of anchize/deanchize
+   - Add alignment at the BEGINNING of each phase
+   - For loops: align BEFORE each iteration
 6. **Migrate tests** (use strategy objects instead of static methods)
 
-The key insight is that **closures become traits**, enabling full composability while maintaining the same memory layout and performance characteristics.
+### The Key Insights
+
+1. **Closures become traits**, enabling full composability
+2. **Alignment moves from end to beginning**, enabling tighter packing but requiring discipline
+3. **Safety requires systematic approach** - the ancha pattern is more efficient but less forgiving
+
+### The Critical Trade-off
+
+**Blob**: Conservative, safe, wastes some space
+**Ancha**: Efficient, composable, requires careful alignment discipline
+
+**The ancha system prioritizes space efficiency and composability over automatic safety. This design enables better cache utilization and more flexible data layouts, but demands systematic adherence to the alignment rules.**

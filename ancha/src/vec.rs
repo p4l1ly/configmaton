@@ -86,7 +86,6 @@ impl<'a, ElemAnchize: Default> Default for VecAnchizeFromVec<'a, ElemAnchize> {
 impl<'a, ElemAnchize> Anchize<'a> for VecAnchizeFromVec<'a, ElemAnchize>
 where
     ElemAnchize: StaticAnchize<'a>,
-    ElemAnchize::Ancha: Sized,
 {
     type Origin = Vec<ElemAnchize::Origin>;
     type Ancha = AnchaVec<'a, ElemAnchize::Ancha>;
@@ -137,7 +136,6 @@ impl<'a, ElemDeanchize: Default> Default for VecDeanchize<'a, ElemDeanchize> {
 impl<'a, ElemDeanchize> Deanchize<'a> for VecDeanchize<'a, ElemDeanchize>
 where
     ElemDeanchize: StaticDeanchize<'a>,
-    ElemDeanchize::Ancha: Sized,
 {
     type Ancha = AnchaVec<'a, ElemDeanchize::Ancha>;
 

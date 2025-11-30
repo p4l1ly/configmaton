@@ -7,11 +7,11 @@
 //! Serialization strategies are **composable objects** with customizable defaults:
 
 // Core data structures (migrated to ancha system)
+pub mod bdd;
 pub mod sediment;
 pub mod tupellum;
 pub mod vec;
 // pub mod arrmap;
-// pub mod bdd;
 // pub mod hashmap;
 // pub mod list;
 // pub mod vecmap;
@@ -50,7 +50,7 @@ pub trait Anchize<'a> {
     /// For example: `Ancha<'a> = AnchaVec<'a, u8>`
     ///
     /// Note: The lifetime 'a is the lifetime of the blob itself.
-    type Ancha: Sized;
+    type Ancha;
 
     /// Reserve space for the blob.
     fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve);
@@ -74,7 +74,7 @@ pub trait Anchize<'a> {
 /// This is origin-agnostic - it just fixes up pointers in place.
 pub trait Deanchize<'a> {
     /// The ancha type family (blob, parameterized by lifetime)
-    type Ancha: Sized;
+    type Ancha;
 
     /// Fix up pointers in the blob.
     ///
@@ -93,7 +93,7 @@ pub trait StaticAnchize<'a> {
     type Context;
 
     /// The ancha type (no lifetime needed for fixed-size types)
-    type Ancha: Sized;
+    type Ancha;
 
     /// Serialize by mutating the ancha in place.
     fn anchize_static(
@@ -105,7 +105,7 @@ pub trait StaticAnchize<'a> {
 }
 
 pub trait StaticDeanchize<'a> {
-    type Ancha: Sized;
+    type Ancha;
     fn deanchize_static(&self, ancha: &mut Self::Ancha);
 }
 
