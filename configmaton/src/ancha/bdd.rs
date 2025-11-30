@@ -89,9 +89,14 @@ pub struct NodeOwned<'a, Var, Leaf> {
     pub owned: AnchaBdd<'a, Var, Leaf>,
 }
 
-/// Helper to get pointer to data behind struct.
+/// Helper to get pointer to data behind struct with proper alignment.
 unsafe fn get_behind_struct<A, B>(a: &A) -> *const B {
-    (a as *const A).add(1) as *const B
+    use super::align_up;
+    use std::mem::align_of;
+    let ptr = a as *const A as usize;
+    let behind = ptr + std::mem::size_of::<A>();
+    let aligned = align_up(behind, align_of::<B>());
+    aligned as *const B
 }
 
 impl<'a, Var, Leaf> AnchaBdd<'a, Var, Leaf> {
@@ -432,13 +437,13 @@ mod tests {
             }
         }
 
-        let leaf_a = Box::new(BddOrigin::Leaf(b"a".to_vec()));
-        let leaf_b = Box::new(BddOrigin::Leaf(b"b".to_vec()));
-        let ptr_a: *const _ = &*leaf_a;
-        let node = BddOrigin::NodePosOwned {
+        // Simpler test: just owned children
+        let leaf_a = BddOrigin::Leaf(b"a".to_vec());
+        let leaf_b = BddOrigin::Leaf(b"b".to_vec());
+        let node = BddOrigin::NodeBothOwned {
             var: 5u8, // Will become 50!
-            pos: leaf_b,
-            neg: ptr_a,
+            pos: Box::new(leaf_b),
+            neg: Box::new(leaf_a),
         };
 
         // Use custom var anchization!
