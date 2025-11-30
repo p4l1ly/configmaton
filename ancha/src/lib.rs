@@ -7,14 +7,14 @@
 //! Serialization strategies are **composable objects** with customizable defaults:
 
 // Core data structures (migrated to ancha system)
+pub mod arrmap;
 pub mod bdd;
+pub mod flagellum;
+pub mod list;
 pub mod sediment;
 pub mod tupellum;
 pub mod vec;
-// pub mod arrmap;
-// pub mod hashmap;
-// pub mod list;
-// pub mod vecmap;
+pub mod vecmap;
 
 // TODO: Migrate these from blob
 // pub mod arrmap;
@@ -277,4 +277,108 @@ impl<'a, T> Default for NoopDeanchize<'a, T> {
 impl<'a, T> StaticDeanchize<'a> for NoopDeanchize<'a, T> {
     type Ancha = T;
     fn deanchize_static(&self, _ancha: &mut Self::Ancha) {}
+}
+
+// ============================================================================
+// Traits for Associative Containers
+// ============================================================================
+
+/// Trait for matching keys in associative containers.
+///
+/// # Safety
+///
+/// Implementations must ensure the match predicate is consistent and doesn't
+/// access invalid memory.
+pub trait Matches<T> {
+    /// Check if this matcher matches the given value.
+    ///
+    /// # Safety
+    ///
+    /// The `other` reference must be valid and properly initialized.
+    unsafe fn matches(&self, other: &T) -> bool;
+}
+
+/// Wrapper for equality-based matching.
+pub struct EqMatch<'a, X>(pub &'a X);
+
+impl<'a, X: Eq> Matches<X> for EqMatch<'a, X> {
+    unsafe fn matches(&self, other: &X) -> bool {
+        *self.0 == *other
+    }
+}
+
+/// Matcher that matches any value (wildcard).
+pub struct AnyMatch;
+
+impl<T> Matches<T> for AnyMatch {
+    unsafe fn matches(&self, _: &T) -> bool {
+        true
+    }
+}
+
+/// Trait for types that provide a hash value.
+pub trait MyHash {
+    /// Compute a hash value for this key.
+    fn my_hash(&self) -> usize;
+}
+
+/// Trait for types that can be checked for emptiness.
+pub trait IsEmpty {
+    fn is_empty(&self) -> bool;
+}
+
+impl<X> IsEmpty for Vec<X> {
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+/// Super-trait for associative containers, defining associated types.
+pub trait AssocsSuper<'a> {
+    /// The key type for this associative container.
+    type Key: 'a;
+
+    /// The value type for this associative container.
+    type Val: 'a;
+
+    /// The iterator type returned by `iter_matches`.
+    type I<'b, X: 'b + Matches<Self::Key>>: Iterator<Item = (&'a Self::Key, &'a Self::Val)>
+    where
+        'a: 'b;
+}
+
+/// Trait for associative containers (maps) in ancha format.
+pub trait Assocs<'a>: AssocsSuper<'a> {
+    /// Create an iterator over key-value pairs matching the given key predicate.
+    ///
+    /// # Safety
+    ///
+    /// The container must be properly initialized and the buffer must remain
+    /// valid for the lifetime 'a.
+    unsafe fn iter_matches<'c, 'b, X: Matches<Self::Key>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    where
+        'a: 'b + 'c;
+}
+
+/// Trait for single key-value associations.
+pub trait Assoc<'a> {
+    /// The key type.
+    type Key: 'a;
+
+    /// The value type.
+    type Val: 'a;
+
+    /// Get a reference to the key.
+    ///
+    /// # Safety
+    ///
+    /// The structure must be properly initialized.
+    unsafe fn key(&self) -> &'a Self::Key;
+
+    /// Get a reference to the value.
+    ///
+    /// # Safety
+    ///
+    /// The structure must be properly initialized.
+    unsafe fn val(&self) -> &'a Self::Val;
 }
