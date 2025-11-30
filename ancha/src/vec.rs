@@ -66,6 +66,7 @@ impl<'a, X> AnchaVec<'a, X> {
 /// Anchization strategy for AnchaVec with customizable element anchization.
 ///
 /// This is the key to composability: you can plug in ANY element anchization strategy!
+#[derive(Clone, Copy)]
 pub struct VecAnchizeFromVec<'a, ElemAnchize> {
     pub elem_ancha: ElemAnchize,
     _phantom: PhantomData<&'a ElemAnchize>,
@@ -116,6 +117,7 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct VecDeanchize<'a, ElemDeanchize> {
     pub elem_deancha: ElemDeanchize,
     _phantom: PhantomData<&'a ElemDeanchize>,

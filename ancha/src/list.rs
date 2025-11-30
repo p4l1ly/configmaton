@@ -78,6 +78,7 @@ impl<'a, X> AnchaList<'a, X> {
 // ============================================================================
 
 /// Strategy for anchizing a `Vec<Origin>` into a linked list.
+#[derive(Clone, Copy)]
 pub struct ListAnchizeFromVec<'a, ElemAnchize> {
     pub elem_ancha: ElemAnchize,
     _phantom: PhantomData<&'a ElemAnchize>,
@@ -161,6 +162,7 @@ where
 // ============================================================================
 
 /// Strategy for deanchizing an `AnchaList`.
+#[derive(Clone, Copy)]
 pub struct ListDeanchize<'a, ElemDeanchize> {
     pub elem_deancha: ElemDeanchize,
     _phantom: PhantomData<&'a ElemDeanchize>,

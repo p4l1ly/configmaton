@@ -55,6 +55,7 @@ impl<'a, X> AnchaSediment<'a, X> {
 /// Strategy for anchizing a `Vec<Origin>` into `AnchaSediment<Ancha>`.
 ///
 /// Each element can have a variable size in the serialized form.
+#[derive(Clone, Copy)]
 pub struct SedimentAnchizeFromVec<'a, ElemAnchize> {
     pub elem_ancha: ElemAnchize,
     _phantom: PhantomData<&'a ElemAnchize>,
@@ -112,6 +113,7 @@ where
 /// Strategy for deanchizing an `AnchaSediment`.
 ///
 /// Fixes up pointers in variable-sized elements.
+#[derive(Clone, Copy)]
 pub struct SedimentDeanchize<'a, ElemDeanchize> {
     pub elem_deancha: ElemDeanchize,
     _phantom: PhantomData<&'a ElemDeanchize>,

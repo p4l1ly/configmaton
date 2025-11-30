@@ -32,6 +32,7 @@ pub struct Tupellum<'a, A, B> {
     _phantom: PhantomData<&'a B>,
 }
 
+#[derive(Clone, Copy)]
 pub struct TupellumAnchizeFromTuple<'a, A, B> {
     pub a_ancha: A,
     pub b_ancha: B,
@@ -77,6 +78,7 @@ impl<'a, A: Anchize<'a>, B: Anchize<'a, Context = A::Context>> Anchize<'a>
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct TupellumDeanchizeFromTuple<'a, A, B> {
     pub a_deancha: A,
     pub b_deancha: B,

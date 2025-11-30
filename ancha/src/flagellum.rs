@@ -60,6 +60,7 @@ impl<'a, K: 'a, V: 'a> super::Assoc<'a> for AnchaFlagellum<'a, K, V> {
 // ============================================================================
 
 /// Strategy for anchizing a (K, V) tuple into a Flagellum.
+#[derive(Clone, Copy)]
 pub struct FlagellumAnchizeFromTuple<'a, KeyAnchize, ValueAnchize> {
     pub key_ancha: KeyAnchize,
     pub value_ancha: ValueAnchize,
@@ -124,6 +125,7 @@ where
 // ============================================================================
 
 /// Strategy for deanchizing a Flagellum.
+#[derive(Clone, Copy)]
 pub struct FlagellumDeanchize<'a, KeyDeanchize, ValueDeanchize> {
     pub key_deancha: KeyDeanchize,
     pub value_deancha: ValueDeanchize,
@@ -229,7 +231,7 @@ mod tests {
 
         unsafe {
             cur = anchize.anchize(&origin1, &(), cur);
-            cur = anchize.anchize(&origin2, &(), cur);
+            anchize.anchize::<()>(&origin2, &(), cur);
 
             cur = BuildCursor::new(buf.as_mut_ptr());
             cur = deanchize.deanchize(cur);

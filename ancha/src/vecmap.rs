@@ -78,6 +78,7 @@ impl<'a, K, V> Iterator for AnchaVecMapIter<'a, K, V> {
 use super::{Anchize, StaticAnchize};
 
 /// Strategy for anchizing a Vec<(K, V)> into a VecMap.
+#[derive(Clone, Copy)]
 pub struct VecMapAnchizeFromVec<'a, KeyAnchize, ValueAnchize> {
     pub key_ancha: KeyAnchize,
     pub value_ancha: ValueAnchize,
@@ -173,6 +174,7 @@ where
 use super::{Deanchize, StaticDeanchize};
 
 /// Strategy for deanchizing a VecMap.
+#[derive(Clone, Copy)]
 pub struct VecMapDeanchize<'a, KeyDeanchize, ValueDeanchize> {
     pub key_deancha: KeyDeanchize,
     pub value_deancha: ValueDeanchize,

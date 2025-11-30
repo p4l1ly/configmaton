@@ -8,9 +8,11 @@
 
 // Core data structures (migrated to ancha system)
 pub mod arrmap;
+pub mod assoc_list;
 pub mod bdd;
 pub mod flagellum;
 pub mod list;
+// pub mod listmap;
 pub mod sediment;
 pub mod tupellum;
 pub mod vec;
@@ -231,6 +233,7 @@ pub unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
 // ============================================================================
 
 /// Direct copy: the default anchization for Copy types.
+#[derive(Clone, Copy)]
 pub struct CopyAnchize<'a, T, Ctx>(std::marker::PhantomData<&'a (T, Ctx)>);
 
 impl<'a, T, Ctx> CopyAnchize<'a, T, Ctx> {
@@ -260,6 +263,7 @@ impl<'a, T: Copy, Ctx> StaticAnchize<'a> for CopyAnchize<'a, T, Ctx> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct NoopDeanchize<'a, T>(std::marker::PhantomData<&'a T>);
 
 impl<'a, T> NoopDeanchize<'a, T> {

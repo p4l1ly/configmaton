@@ -144,6 +144,7 @@ impl<'a, Var, Leaf> AnchaBdd<'a, Var, Leaf> {
 // ============================================================================
 
 /// Strategy for anchizing a BDD.
+#[derive(Clone, Copy)]
 pub struct BddAnchize<'a, VarAnchize, LeafAnchize> {
     pub var_ancha: VarAnchize,
     pub leaf_ancha: LeafAnchize,
@@ -326,6 +327,7 @@ where
 // ============================================================================
 
 /// Strategy for deanchizing a BDD.
+#[derive(Clone, Copy)]
 pub struct BddDeanchize<'a, VarDeanchize, LeafDeanchize> {
     pub var_deancha: VarDeanchize,
     pub leaf_deancha: LeafDeanchize,

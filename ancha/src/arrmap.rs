@@ -38,6 +38,7 @@ impl<'a, const SIZE: usize, V> AnchaArrMap<'a, SIZE, V> {
 // ============================================================================
 
 /// Strategy for anchizing an array into an ArrMap.
+#[derive(Clone, Copy)]
 pub struct ArrMapAnchizeFromArray<'a, const SIZE: usize, ValueAnchize> {
     pub value_ancha: ValueAnchize,
     _phantom: PhantomData<&'a ValueAnchize>,
@@ -103,6 +104,7 @@ where
 // ============================================================================
 
 /// Strategy for deanchizing an AnchaArrMap.
+#[derive(Clone, Copy)]
 pub struct ArrMapDeanchize<'a, const SIZE: usize, ValueDeanchize> {
     pub value_deancha: ValueDeanchize,
     _phantom: PhantomData<&'a ValueDeanchize>,
