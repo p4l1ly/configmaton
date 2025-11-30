@@ -41,6 +41,22 @@ impl<'a, X> AnchaVec<'a, X> {
         let ptr = (self as *const Self).add(1) as *const X;
         &*ptr.add(ix)
     }
+
+    /// Get a reference to data that follows this AnchaVec in memory.
+    ///
+    /// This is used when multiple structures are stored sequentially
+    /// (e.g., in `Tupellum`).
+    ///
+    /// # Safety
+    ///
+    /// - The AnchaVec must be properly initialized
+    /// - There must be valid data of type `After` following the elements
+    pub unsafe fn behind<After>(&self) -> &'a After {
+        let elem_ptr = (self as *const Self).add(1) as *const X;
+        let after_elems = elem_ptr.add(self.len) as *const u8;
+        let aligned = super::align_up(after_elems as usize, std::mem::align_of::<After>());
+        &*(aligned as *const After)
+    }
 }
 
 // ============================================================================

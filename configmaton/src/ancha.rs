@@ -21,8 +21,14 @@
 //! ```
 
 // Core data structures (migrated to ancha system)
+pub mod arrmap;
 pub mod bdd;
+pub mod hashmap;
+pub mod list;
+pub mod sediment;
+pub mod tupellum;
 pub mod vec;
+pub mod vecmap;
 
 // TODO: Migrate these from blob
 // pub mod arrmap;
@@ -31,9 +37,7 @@ pub mod vec;
 // pub mod flagellum;
 // pub mod hashmap;
 // pub mod keyval_state;
-// pub mod list;
 // pub mod listmap;
-// pub mod sediment;
 // pub mod state;
 // pub mod tupellum;
 // pub mod vecmap;
@@ -219,6 +223,18 @@ pub fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
+/// Get a pointer to data behind a struct with proper alignment.
+///
+/// # Safety
+///
+/// - `a` must point to a valid, initialized structure of type A
+/// - There must be valid data of type B after the structure
+/// - The alignment requirements of B must be satisfied
+#[inline]
+pub unsafe fn get_behind_struct<A, B>(a: *const A) -> *const B {
+    align_up((a as *const u8).add(size_of::<A>()) as usize, align_of::<B>()) as *const B
+}
+
 // ============================================================================
 // Default implementations for primitives
 // ============================================================================
@@ -247,15 +263,36 @@ impl<T: Copy> StaticAnchize for DirectCopy<T> {
     }
 }
 
-// Implement Anchize for DirectCopy via StaticAnchize
-impl<T: Copy + 'static> Anchize for DirectCopy<T> {
-    type Origin = T;
-    type Ancha<'a> = T;
+// ============================================================================
+// StaticToDynamic: Adapter for lazy usage (use sparingly!)
+// ============================================================================
+
+/// Adapter to lift StaticAnchize into Anchize/Deanchize.
+///
+/// **Use sparingly!** This is for cases where you're too lazy to create
+/// a proper data structure. In most cases, you should use:
+/// - `Vec` for arrays of fixed-size elements
+/// - Not `Sediment`/`List`/`Tupellum` with primitives
+pub struct StaticToDynamic<S>(pub S);
+
+impl<S> StaticToDynamic<S> {
+    pub fn new(inner: S) -> Self {
+        StaticToDynamic(inner)
+    }
+}
+
+impl<S> Anchize for StaticToDynamic<S>
+where
+    S: StaticAnchize + 'static,
+    S::Ancha: Copy,
+{
+    type Origin = S::Origin;
+    type Ancha<'a> = S::Ancha;
 
     fn reserve(&self, _origin: &Self::Origin, sz: &mut Reserve) -> usize {
-        sz.add::<T>(0);
+        sz.add::<S::Ancha>(0);
         let addr = sz.0;
-        sz.add::<T>(1);
+        sz.add::<S::Ancha>(1);
         addr
     }
 
@@ -264,13 +301,17 @@ impl<T: Copy + 'static> Anchize for DirectCopy<T> {
         origin: &Self::Origin,
         cur: BuildCursor<Self::Ancha<'a>>,
     ) -> BuildCursor<After> {
-        self.anchize_static(origin, cur.get_mut());
+        self.0.anchize_static(origin, cur.get_mut());
         cur.behind(1)
     }
 }
 
-impl<T: Copy + 'static> Deanchize for DirectCopy<T> {
-    type Ancha<'a> = T;
+impl<S> Deanchize for StaticToDynamic<S>
+where
+    S: StaticAnchize + 'static,
+    S::Ancha: Copy,
+{
+    type Ancha<'a> = S::Ancha;
 
     unsafe fn deanchize<'a, After>(
         &self,
