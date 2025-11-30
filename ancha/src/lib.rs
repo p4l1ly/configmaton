@@ -7,13 +7,13 @@
 //! Serialization strategies are **composable objects** with customizable defaults:
 
 // Core data structures (migrated to ancha system)
+pub mod sediment;
 pub mod tupellum;
 pub mod vec;
 // pub mod arrmap;
 // pub mod bdd;
 // pub mod hashmap;
 // pub mod list;
-// pub mod sediment;
 // pub mod vecmap;
 
 // TODO: Migrate these from blob
