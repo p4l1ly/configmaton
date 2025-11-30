@@ -109,32 +109,30 @@ pub struct AssocListIter<'a, 'b, X, KV> {
     current: *const AnchaList<'a, KV>,
 }
 
-impl<'a, 'b, KV: 'b + Assoc<'a> + 'a, X: Matches<KV::Key>> Iterator
+impl<'a, 'b, KV: 'b + Assoc<'a> + 'a, X: Matches<KV::Key>> super::UnsafeIterator
     for AssocListIter<'a, 'b, X, KV>
 {
     type Item = (&'a KV::Key, &'a KV::Val);
 
-    fn next(&mut self) -> Option<Self::Item> {
-        unsafe {
-            while !self.current.is_null() {
-                let node = &*self.current;
-                // The list iterator logic - need to get the value from the node
-                // Using the list's internal structure
-                let kv_ptr = (self.current as *const u8)
-                    .add(std::mem::size_of::<*const AnchaList<'a, KV>>())
-                    as *const KV;
-                let key_val = &*kv_ptr;
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        while !self.current.is_null() {
+            let node = &*self.current;
+            // The list iterator logic - need to get the value from the node
+            // Using the list's internal structure
+            let kv_ptr = (self.current as *const u8)
+                .add(std::mem::size_of::<*const AnchaList<'a, KV>>())
+                as *const KV;
+            let key_val = &*kv_ptr;
 
-                // Move to next node
-                self.current = node.next;
+            // Move to next node
+            self.current = node.next;
 
-                let key = key_val.key();
-                if self.x.matches(key) {
-                    return Some((key, key_val.val()));
-                }
+            let key = key_val.key();
+            if self.x.matches(key) {
+                return Some((key, key_val.val()));
             }
-            None
         }
+        None
     }
 }
 
@@ -163,7 +161,9 @@ impl<'a, KV: Assoc<'a> + 'a> Assocs<'a> for AnchaAssocList<'a, KV> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{flagellum::*, vec::*, AnyMatch, CopyAnchize, EqMatch, NoopDeanchize};
+    use crate::{
+        flagellum::*, vec::*, AnyMatch, CopyAnchize, EqMatch, NoopDeanchize, UnsafeIterator,
+    };
 
     type TestFlagellum<'a> =
         crate::flagellum::AnchaFlagellum<'a, u32, crate::vec::AnchaVec<'a, u8>>;
@@ -198,15 +198,19 @@ mod tests {
 
         // Search for key 2
         let mut iter = unsafe { assoc_list.iter_matches(&EqMatch(&2u32)) };
-        let (k, v) = iter.next().unwrap();
+        let (k, v) = unsafe { iter.next() }.unwrap();
         assert_eq!(*k, 2u32);
         assert_eq!(unsafe { v.as_ref() }, &[30u8, 40]);
-        assert!(iter.next().is_none());
+        assert!(unsafe { iter.next() }.is_none());
 
         // Iterate all with AnyMatch
-        let collected: Vec<(u32, Vec<u8>)> = unsafe {
-            assoc_list.iter_matches(&AnyMatch).map(|(k, v)| (*k, v.as_ref().to_vec())).collect()
-        };
+        let mut collected: Vec<(u32, Vec<u8>)> = Vec::new();
+        unsafe {
+            let mut iter = assoc_list.iter_matches(&AnyMatch);
+            while let Some((k, v)) = iter.next() {
+                collected.push((*k, v.as_ref().to_vec()));
+            }
+        }
 
         assert_eq!(collected.len(), 3);
         assert_eq!(collected[0], (1u32, vec![10u8, 20]));

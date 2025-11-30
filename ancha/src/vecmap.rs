@@ -71,6 +71,31 @@ impl<'a, K, V> Iterator for AnchaVecMapIter<'a, K, V> {
     }
 }
 
+/// Iterator over VecMap entries matching a key.
+pub struct VecMapMatchIter<'a, 'b, X, K, V> {
+    pub x: &'b X,
+    items: &'a [VecMapItem<K, V>],
+    index: usize,
+    _phantom: PhantomData<&'a K>,
+}
+
+impl<'a, 'b, X: super::Matches<K>, K, V: 'b> super::UnsafeIterator
+    for VecMapMatchIter<'a, 'b, X, K, V>
+{
+    type Item = (&'a K, &'a V);
+
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        while self.index < self.items.len() {
+            let item = &self.items[self.index];
+            self.index += 1;
+            if self.x.matches(&item.key) {
+                return Some((&item.key, &*item.val));
+            }
+        }
+        None
+    }
+}
+
 // ============================================================================
 // Anchization Strategy
 // ============================================================================
@@ -236,6 +261,28 @@ where
         }
 
         vcur.transmute()
+    }
+}
+
+// ============================================================================
+// Assocs Implementation
+// ============================================================================
+
+impl<'a, K: 'a, V: 'a> super::AssocsSuper<'a> for AnchaVecMap<'a, K, V> {
+    type Key = K;
+    type Val = V;
+    type I<'b, X: 'b + super::Matches<K>>
+        = VecMapMatchIter<'a, 'b, X, K, V>
+    where
+        'a: 'b;
+}
+
+impl<'a, K: 'a, V: 'a> super::Assocs<'a> for AnchaVecMap<'a, K, V> {
+    unsafe fn iter_matches<'c, 'b, X: super::Matches<K>>(&'c self, key: &'b X) -> Self::I<'b, X>
+    where
+        'a: 'b + 'c,
+    {
+        VecMapMatchIter { x: key, items: self.keys.as_ref(), index: 0, _phantom: PhantomData }
     }
 }
 

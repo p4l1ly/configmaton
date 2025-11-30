@@ -15,7 +15,10 @@
 
 use std::marker::PhantomData;
 
-use super::{Anchize, Assocs, BuildCursor, Deanchize, EqMatch, IsEmpty, MyHash, Reserve, Shifter};
+use super::{
+    Anchize, Assocs, BuildCursor, Deanchize, EqMatch, IsEmpty, MyHash, Reserve, Shifter,
+    UnsafeIterator,
+};
 
 /// Hash map structure.
 #[repr(C)]
@@ -36,7 +39,9 @@ impl<'a, AList: Assocs<'a>> AnchaHashMap<'a, AList> {
             return None;
         }
         let alist = &*alist_ptr;
-        alist.iter_matches(&EqMatch(key)).next().map(|(_, val)| val)
+        let eq_match = EqMatch(key);
+        let mut iter = alist.iter_matches(&eq_match);
+        iter.next().map(|(_, val)| val)
     }
 }
 
@@ -95,9 +100,12 @@ where
         let cur = cur.align::<Self::Ancha>();
 
         // Set mask (capacity - 1, for fast modulo via bitwise AND)
-        (*cur.get_mut()).mask = origin.len() - 1;
+        // For empty maps, use mask = 0
+        (*cur.get_mut()).mask = if origin.len() == 0 { 0 } else { origin.len() - 1 };
 
         // Position cursors
+        // NOTE: arr field is NOT set - it's a phantom/marker field!
+        // The array of pointers is stored INLINE after mask
         let mut arr_cur = cur.transmute::<usize>().behind::<*const AListAnchize::Ancha>(1);
         let mut alist_cur: BuildCursor<AListAnchize::Ancha> =
             arr_cur.behind::<AListAnchize::Ancha>(origin.len());
@@ -151,6 +159,10 @@ where
     type Ancha = AnchaHashMap<'a, AListDeanchize::Ancha>;
 
     unsafe fn deanchize<After>(&self, cur: BuildCursor<Self::Ancha>) -> BuildCursor<After> {
+        let shifter = Shifter(cur.buf);
+
+        // NOTE: arr field is NOT shifted - it's a phantom/marker field!
+        // Only the inline array pointers are shifted
         let mut arr_cur = cur.transmute::<usize>().behind::<*const AListDeanchize::Ancha>(1);
         let hashmap_cap = (*cur.get_mut()).mask + 1;
         let mut alist_cur = arr_cur.behind::<AListDeanchize::Ancha>(hashmap_cap);
@@ -159,13 +171,23 @@ where
         for _ in 0..hashmap_cap {
             let arr_ptr = arr_cur.get_mut();
             if !(*arr_ptr).is_null() {
-                Shifter(cur.buf).shift(&mut *arr_ptr);
+                shifter.shift(&mut *arr_ptr);
                 alist_cur = self.alist_deancha.deanchize(alist_cur);
             }
             arr_cur.inc();
         }
 
         alist_cur.transmute()
+    }
+}
+
+// ============================================================================
+// MyHash Implementations for Common Types
+// ============================================================================
+
+impl MyHash for u8 {
+    fn my_hash(&self) -> usize {
+        *self as usize
     }
 }
 

@@ -26,7 +26,7 @@ pub mod vecmap;
 pub mod hashmap;
 // pub mod keyval_state;
 // pub mod listmap; // Duplicate - already defined above
-// pub mod state;
+// pub mod state; // Moved to configmaton::my_ancha
 // pub mod vecmap;
 
 use std::mem::{align_of, size_of};
@@ -198,6 +198,7 @@ impl<A> BuildCursor<A> {
 }
 
 /// Shifter: converts offsets to pointers during deanchization.
+#[derive(Clone, Copy)]
 pub struct Shifter(pub *mut u8);
 
 impl Shifter {
@@ -337,6 +338,33 @@ impl<X> IsEmpty for Vec<X> {
     }
 }
 
+// ============================================================================
+// UnsafeIterator Trait
+// ============================================================================
+
+/// Iterator trait for unsafe iteration over blob structures.
+///
+/// # Safety
+///
+/// Implementations must ensure that:
+/// - The iterator only accesses memory within the valid blob
+/// - Returned references have appropriate lifetimes
+pub trait UnsafeIterator {
+    /// The type of elements yielded by this iterator.
+    type Item;
+
+    /// Advance the iterator and return the next element.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the blob structure is valid and properly initialized.
+    unsafe fn next(&mut self) -> Option<Self::Item>;
+}
+
+// ============================================================================
+// Assocs Traits
+// ============================================================================
+
 /// Super-trait for associative containers, defining associated types.
 pub trait AssocsSuper<'a> {
     /// The key type for this associative container.
@@ -346,7 +374,7 @@ pub trait AssocsSuper<'a> {
     type Val: 'a;
 
     /// The iterator type returned by `iter_matches`.
-    type I<'b, X: 'b + Matches<Self::Key>>: Iterator<Item = (&'a Self::Key, &'a Self::Val)>
+    type I<'b, X: 'b + Matches<Self::Key>>: UnsafeIterator<Item = (&'a Self::Key, &'a Self::Val)>
     where
         'a: 'b;
 }

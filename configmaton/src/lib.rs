@@ -10,5 +10,6 @@ pub mod holder;
 pub mod keyval_nfa;
 pub mod keyval_runner;
 pub mod keyval_simulator;
+pub mod my_ancha; // Ancha-based structures specific to configmaton
 pub mod onion;
 // pub mod determinize;

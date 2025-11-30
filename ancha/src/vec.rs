@@ -23,8 +23,7 @@ impl<'a, X> AnchaVec<'a, X> {
     /// - The AnchaVec must be properly initialized
     /// - Elements must be valid
     pub unsafe fn as_ref(&self) -> &'a [X] {
-        let ptr = (self as *const Self).add(1) as *const X;
-        std::slice::from_raw_parts(ptr, self.len)
+        std::slice::from_raw_parts(super::get_behind_struct::<Self, X>(self), self.len)
     }
 
     /// Get an element by index.
@@ -38,8 +37,7 @@ impl<'a, X> AnchaVec<'a, X> {
     /// - The AnchaVec must be properly initialized
     pub unsafe fn get(&self, ix: usize) -> &'a X {
         assert!(ix < self.len);
-        let ptr = (self as *const Self).add(1) as *const X;
-        &*ptr.add(ix)
+        &*super::get_behind_struct::<Self, X>(self).add(ix)
     }
 
     /// Get a reference to data that follows this AnchaVec in memory.
@@ -177,5 +175,43 @@ mod tests {
 
         let anchavec = unsafe { &*(buf.as_ptr() as *const AnchaVec<u8>) };
         assert_eq!(unsafe { anchavec.as_ref() }, &[1, 2, 3]);
+    }
+}
+
+// ============================================================================
+// Iterator
+// ============================================================================
+
+/// Iterator over elements in an AnchaVec.
+pub struct AnchaVecIter<'a, X> {
+    cur: *const X,
+    pub end: *const X,
+    _phantom: PhantomData<&'a X>,
+}
+
+impl<'a, X> AnchaVec<'a, X> {
+    /// Create an iterator over the elements.
+    ///
+    /// # Safety
+    ///
+    /// - The AnchaVec must be properly initialized
+    /// - Elements must be valid
+    pub unsafe fn iter(&self) -> AnchaVecIter<'a, X> {
+        let cur = super::get_behind_struct::<Self, X>(self);
+        AnchaVecIter { cur, end: cur.add(self.len), _phantom: PhantomData }
+    }
+}
+
+impl<'a, X> super::UnsafeIterator for AnchaVecIter<'a, X> {
+    type Item = &'a X;
+
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        if self.cur < self.end {
+            let result = &*self.cur;
+            self.cur = self.cur.add(1);
+            Some(result)
+        } else {
+            None
+        }
     }
 }

@@ -292,28 +292,28 @@ pub struct ListMapIter<'a, 'b, X, K, V> {
     current: *const AnchaList<'a, ListMapItem<K, V>>,
 }
 
-impl<'a, 'b, X: Matches<K>, K: 'a, V: 'a + 'b> Iterator for ListMapIter<'a, 'b, X, K, V> {
+impl<'a, 'b, X: Matches<K>, K: 'a, V: 'a + 'b> super::UnsafeIterator
+    for ListMapIter<'a, 'b, X, K, V>
+{
     type Item = (&'a K, &'a V);
 
-    fn next(&mut self) -> Option<Self::Item> {
-        unsafe {
-            while !self.current.is_null() {
-                let node = &*self.current;
-                // Get the item from the node
-                let item_ptr = (self.current as *const u8)
-                    .add(std::mem::size_of::<*const AnchaList<'a, ListMapItem<K, V>>>())
-                    as *const ListMapItem<K, V>;
-                let item = &*item_ptr;
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        while !self.current.is_null() {
+            let node = &*self.current;
+            // Get the item from the node
+            let item_ptr = (self.current as *const u8)
+                .add(std::mem::size_of::<*const AnchaList<'a, ListMapItem<K, V>>>())
+                as *const ListMapItem<K, V>;
+            let item = &*item_ptr;
 
-                // Move to next node
-                self.current = node.next;
+            // Move to next node
+            self.current = node.next;
 
-                if self.x.matches(&item.key) {
-                    return Some((&item.key, &*item.val));
-                }
+            if self.x.matches(&item.key) {
+                return Some((&item.key, &*item.val));
             }
-            None
         }
+        None
     }
 }
 
@@ -342,7 +342,7 @@ impl<'a, K: 'a, V: 'a> Assocs<'a> for AnchaListMap<'a, K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{vec::*, AnyMatch, CopyAnchize, EqMatch, NoopDeanchize};
+    use crate::{vec::*, AnyMatch, CopyAnchize, EqMatch, NoopDeanchize, UnsafeIterator};
 
     #[test]
     fn test_listmap_basic() {
@@ -370,15 +370,19 @@ mod tests {
 
         // Search for key 2
         let mut iter = unsafe { listmap.iter_matches(&EqMatch(&2u32)) };
-        let (k, v) = iter.next().unwrap();
+        let (k, v) = unsafe { iter.next() }.unwrap();
         assert_eq!(*k, 2u32);
         assert_eq!(unsafe { v.as_ref() }, &[30u8, 40]);
-        assert!(iter.next().is_none());
+        assert!(unsafe { iter.next() }.is_none());
 
         // Iterate all with AnyMatch
-        let collected: Vec<(u32, Vec<u8>)> = unsafe {
-            listmap.iter_matches(&AnyMatch).map(|(k, v)| (*k, v.as_ref().to_vec())).collect()
-        };
+        let mut collected: Vec<(u32, Vec<u8>)> = Vec::new();
+        unsafe {
+            let mut iter = listmap.iter_matches(&AnyMatch);
+            while let Some((k, v)) = iter.next() {
+                collected.push((*k, v.as_ref().to_vec()));
+            }
+        }
 
         assert_eq!(collected.len(), 3);
         assert_eq!(collected[0], (1u32, vec![10u8, 20]));
