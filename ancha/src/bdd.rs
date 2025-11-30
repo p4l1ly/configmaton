@@ -380,8 +380,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ancha::vec::{AnchaVec, VecAncha};
-    use crate::ancha::DirectCopy;
+    use crate::vec::{AnchaVec, VecAncha};
+    use crate::DirectCopy;
 
     // c & (a == b)
     #[test]

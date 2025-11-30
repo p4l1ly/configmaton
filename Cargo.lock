@@ -9,6 +9,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "ancha"
+version = "0.1.0"
+dependencies = [
+ "hashbrown 0.15.2",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -111,6 +118,7 @@ dependencies = [
 name = "configmaton"
 version = "0.1.0"
 dependencies = [
+ "ancha",
  "clap",
  "hashbrown 0.15.2",
  "indexmap 2.7.0",

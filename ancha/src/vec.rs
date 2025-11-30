@@ -148,7 +148,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ancha::DirectCopy;
+    use crate::DirectCopy;
 
     #[test]
     fn test_anchavec_basic() {

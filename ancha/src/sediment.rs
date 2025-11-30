@@ -3,9 +3,8 @@
 //! Unlike AnchaVec where all elements have the same size, AnchaSediment
 //! allows heterogeneous sizes. Each element is stored sequentially.
 
-use super::{align_up, get_behind_struct, Anchize, BuildCursor, Deanchize, Reserve};
+use super::{get_behind_struct, Anchize, BuildCursor, Deanchize, Reserve};
 use std::marker::PhantomData;
-use std::mem::align_of;
 
 /// AnchaSediment: a packed array where each element can have different size.
 ///
@@ -132,8 +131,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ancha::vec::{AnchaVec, VecAncha};
-    use crate::ancha::DirectCopy;
+    use crate::vec::{AnchaVec, VecAncha};
+    use crate::DirectCopy;
 
     #[test]
     fn test_sediment_with_vectors() {
@@ -159,11 +158,7 @@ mod tests {
         unsafe {
             sediment.each(|vec| {
                 results.push(vec.as_ref().to_vec());
-                let ptr =
-                    (vec as *const AnchaVec<u8> as usize) + std::mem::size_of::<AnchaVec<u8>>();
-                let behind = ptr + vec.len;
-                let aligned = align_up(behind, align_of::<AnchaVec<u8>>());
-                aligned as *const AnchaVec<u8>
+                vec.behind()
             });
         }
 

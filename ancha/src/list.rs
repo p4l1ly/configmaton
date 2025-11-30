@@ -155,8 +155,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ancha::vec::{AnchaVec, VecAncha};
-    use crate::ancha::DirectCopy;
+    use crate::vec::{AnchaVec, VecAncha};
+    use crate::DirectCopy;
 
     #[test]
     fn test_list_with_vectors() {

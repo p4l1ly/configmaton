@@ -1,4 +1,4 @@
-pub mod ancha;
+pub use ancha;
 pub mod ast;
 pub mod blob; // TODO: Migrate to ancha and remove
 pub mod char_enfa;
