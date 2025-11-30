@@ -12,7 +12,7 @@ pub mod assoc_list;
 pub mod bdd;
 pub mod flagellum;
 pub mod list;
-// pub mod listmap;
+pub mod listmap;
 pub mod sediment;
 pub mod tupellum;
 pub mod vec;
@@ -23,9 +23,9 @@ pub mod vecmap;
 // pub mod assoc_list;
 // pub mod automaton;
 // pub mod flagellum;
-// pub mod hashmap;
+pub mod hashmap;
 // pub mod keyval_state;
-// pub mod listmap;
+// pub mod listmap; // Duplicate - already defined above
 // pub mod state;
 // pub mod vecmap;
 
@@ -55,7 +55,7 @@ pub trait Anchize<'a> {
     type Ancha;
 
     /// Reserve space for the blob.
-    fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve);
+    fn reserve(&self, origin: &Self::Origin, context: &mut Self::Context, sz: &mut Reserve);
 
     /// Serialize the origin into the blob.
     ///
@@ -66,7 +66,7 @@ pub trait Anchize<'a> {
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After>;
 }
@@ -101,7 +101,7 @@ pub trait StaticAnchize<'a> {
     fn anchize_static(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         ancha: &mut Self::Ancha,
     );
 }
@@ -256,7 +256,7 @@ impl<'a, T: Copy, Ctx> StaticAnchize<'a> for CopyAnchize<'a, T, Ctx> {
     fn anchize_static(
         &self,
         origin: &Self::Origin,
-        _context: &Self::Context,
+        _context: &mut Self::Context,
         ancha: &mut Self::Ancha,
     ) {
         *ancha = *origin;

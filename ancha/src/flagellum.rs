@@ -95,7 +95,7 @@ where
     type Ancha = AnchaFlagellum<'a, KeyAnchize::Ancha, ValueAnchize::Ancha>;
     type Context = KeyAnchize::Context;
 
-    fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve) {
+    fn reserve(&self, origin: &Self::Origin, context: &mut Self::Context, sz: &mut Reserve) {
         sz.add::<Self::Ancha>(0); // Alignment at the beginning!
         sz.add::<KeyAnchize::Ancha>(1); // Space for the key
         self.value_ancha.reserve(&origin.1, context, sz);
@@ -104,7 +104,7 @@ where
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         let cur: BuildCursor<Self::Ancha> = cur.align(); // Alignment at the beginning!
@@ -194,13 +194,13 @@ mod tests {
             FlagellumDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 
@@ -223,15 +223,15 @@ mod tests {
             FlagellumDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin1, &(), &mut sz);
-        anchize.reserve(&origin2, &(), &mut sz);
+        anchize.reserve(&origin1, &mut (), &mut sz);
+        anchize.reserve(&origin2, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let mut cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            cur = anchize.anchize(&origin1, &(), cur);
-            anchize.anchize::<()>(&origin2, &(), cur);
+            cur = anchize.anchize(&origin1, &mut (), cur);
+            anchize.anchize::<()>(&origin2, &mut (), cur);
 
             cur = BuildCursor::new(buf.as_mut_ptr());
             cur = deanchize.deanchize(cur);

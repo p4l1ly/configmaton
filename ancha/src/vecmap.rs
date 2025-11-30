@@ -113,7 +113,7 @@ where
     type Ancha = AnchaVecMap<'a, KeyAnchize::Ancha, ValueAnchize::Ancha>;
     type Context = KeyAnchize::Context;
 
-    fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve) {
+    fn reserve(&self, origin: &Self::Origin, context: &mut Self::Context, sz: &mut Reserve) {
         // Reserve space for the VecMap header (which contains the vector header)
         sz.add::<Self::Ancha>(0);
         sz.add::<Self::Ancha>(1); // The header contains AnchaVec which has len field
@@ -130,7 +130,7 @@ where
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         let cur = cur.align::<Self::Ancha>();
@@ -260,13 +260,13 @@ mod tests {
             VecMapDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 
@@ -294,13 +294,13 @@ mod tests {
             VecMapDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 
@@ -322,13 +322,13 @@ mod tests {
             VecMapDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 

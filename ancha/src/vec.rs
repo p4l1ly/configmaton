@@ -92,7 +92,7 @@ where
     type Ancha = AnchaVec<'a, ElemAnchize::Ancha>;
     type Context = ElemAnchize::Context;
 
-    fn reserve(&self, origin: &Self::Origin, _context: &Self::Context, sz: &mut Reserve) {
+    fn reserve(&self, origin: &Self::Origin, _context: &mut Self::Context, sz: &mut Reserve) {
         sz.add::<Self::Ancha>(0);
         sz.add::<Self::Ancha>(1);
         sz.add::<ElemAnchize::Ancha>(origin.len());
@@ -101,7 +101,7 @@ where
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         let cur: BuildCursor<Self::Ancha> = cur.align();
@@ -165,13 +165,13 @@ mod tests {
         let origin = vec![1u8, 2, 3];
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 

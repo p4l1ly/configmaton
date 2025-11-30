@@ -49,7 +49,7 @@ where
     type Ancha = AnchaAssocList<'a, ElemAnchize::Ancha>;
     type Context = ElemAnchize::Context;
 
-    fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve) {
+    fn reserve(&self, origin: &Self::Origin, context: &mut Self::Context, sz: &mut Reserve) {
         // Delegate to list reserve
         self.list_ancha.reserve(origin, context, sz);
     }
@@ -57,7 +57,7 @@ where
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         // Delegate to list anchize
@@ -184,13 +184,13 @@ mod tests {
         > = AssocListDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 
@@ -226,7 +226,7 @@ mod tests {
         > = AssocListAnchizeFromVec::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         // Empty list should have minimal size
         assert!(sz.0 <= 8);

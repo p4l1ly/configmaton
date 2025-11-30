@@ -62,7 +62,7 @@ impl<'a, A: Anchize<'a>, B: Anchize<'a, Context = A::Context>> Anchize<'a>
     type Ancha = Tupellum<'a, A::Ancha, B::Ancha>;
     type Context = A::Context;
 
-    fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve) {
+    fn reserve(&self, origin: &Self::Origin, context: &mut Self::Context, sz: &mut Reserve) {
         self.a_ancha.reserve(&origin.0, context, sz);
         self.b_ancha.reserve(&origin.1, context, sz);
     }
@@ -70,7 +70,7 @@ impl<'a, A: Anchize<'a>, B: Anchize<'a, Context = A::Context>> Anchize<'a>
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         let vcur = self.a_ancha.anchize(&origin.0, context, cur.transmute());
@@ -135,14 +135,14 @@ mod tests {
 
         // Reserve phase: calculate space needed
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         // Allocate buffer
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 

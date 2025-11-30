@@ -81,7 +81,7 @@ where
     type Ancha = AnchaSediment<'a, ElemAnchize::Ancha>;
     type Context = ElemAnchize::Context;
 
-    fn reserve(&self, origin: &Self::Origin, context: &Self::Context, sz: &mut Reserve) {
+    fn reserve(&self, origin: &Self::Origin, context: &mut Self::Context, sz: &mut Reserve) {
         sz.add::<Self::Ancha>(0); // Alignment at the beginning!
         sz.add::<Self::Ancha>(1);
         for elem_origin in origin.iter() {
@@ -92,7 +92,7 @@ where
     unsafe fn anchize<After>(
         &self,
         origin: &Self::Origin,
-        context: &Self::Context,
+        context: &mut Self::Context,
         cur: BuildCursor<Self::Ancha>,
     ) -> BuildCursor<After> {
         let cur: BuildCursor<Self::Ancha> = cur.align(); // Alignment at the beginning!
@@ -169,7 +169,7 @@ mod tests {
 
         // Reserve phase
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         // Allocate buffer
         let mut buf = vec![0u8; sz.0];
@@ -177,7 +177,7 @@ mod tests {
 
         // Anchize and deanchize
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 
@@ -209,13 +209,13 @@ mod tests {
             SedimentDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 
@@ -233,13 +233,13 @@ mod tests {
             SedimentDeanchize::default();
 
         let mut sz = Reserve(0);
-        anchize.reserve(&origin, &(), &mut sz);
+        anchize.reserve(&origin, &mut (), &mut sz);
 
         let mut buf = vec![0u8; sz.0];
         let cur = BuildCursor::new(buf.as_mut_ptr());
 
         unsafe {
-            anchize.anchize::<()>(&origin, &(), cur.clone());
+            anchize.anchize::<()>(&origin, &mut (), cur.clone());
             deanchize.deanchize::<()>(cur);
         }
 
