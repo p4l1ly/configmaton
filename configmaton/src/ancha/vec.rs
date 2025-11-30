@@ -75,7 +75,7 @@ impl<ElemAnchize> VecAncha<ElemAnchize> {
 
 impl<ElemAnchize> Anchize for VecAncha<ElemAnchize>
 where
-    ElemAnchize: StaticAnchize,
+    ElemAnchize: StaticAnchize + 'static,
     ElemAnchize::Ancha: Sized + 'static,
 {
     type Origin = Vec<ElemAnchize::Origin>;
@@ -110,7 +110,7 @@ where
 
 impl<ElemAnchize> Deanchize for VecAncha<ElemAnchize>
 where
-    ElemAnchize: StaticAnchize,
+    ElemAnchize: StaticAnchize + 'static,
     ElemAnchize::Ancha: Sized + 'static,
 {
     type Ancha<'a> = AnchaVec<'a, ElemAnchize::Ancha>;

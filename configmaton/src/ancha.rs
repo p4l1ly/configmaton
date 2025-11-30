@@ -21,13 +21,13 @@
 //! ```
 
 // Core data structures (migrated to ancha system)
+pub mod bdd;
 pub mod vec;
 
 // TODO: Migrate these from blob
 // pub mod arrmap;
 // pub mod assoc_list;
 // pub mod automaton;
-// pub mod bdd;
 // pub mod flagellum;
 // pub mod hashmap;
 // pub mod keyval_state;
@@ -58,7 +58,11 @@ pub trait Anchize {
     /// The ancha type family (blob, parameterized by lifetime)
     ///
     /// For example: `Ancha<'a> = AnchaVec<'a, u8>`
-    type Ancha<'a>: Sized;
+    ///
+    /// Note: The lifetime 'a is the lifetime of the blob itself.
+    type Ancha<'a>: Sized
+    where
+        Self: 'a;
 
     /// Reserve space for the blob.
     ///
@@ -83,7 +87,9 @@ pub trait Anchize {
 /// This is origin-agnostic - it just fixes up pointers in place.
 pub trait Deanchize {
     /// The ancha type family (blob, parameterized by lifetime)
-    type Ancha<'a>: Sized;
+    type Ancha<'a>: Sized
+    where
+        Self: 'a;
 
     /// Fix up pointers in the blob.
     ///
@@ -242,7 +248,7 @@ impl<T: Copy> StaticAnchize for DirectCopy<T> {
 }
 
 // Implement Anchize for DirectCopy via StaticAnchize
-impl<T: Copy> Anchize for DirectCopy<T> {
+impl<T: Copy + 'static> Anchize for DirectCopy<T> {
     type Origin = T;
     type Ancha<'a> = T;
 
@@ -263,7 +269,7 @@ impl<T: Copy> Anchize for DirectCopy<T> {
     }
 }
 
-impl<T: Copy> Deanchize for DirectCopy<T> {
+impl<T: Copy + 'static> Deanchize for DirectCopy<T> {
     type Ancha<'a> = T;
 
     unsafe fn deanchize<'a, After>(
