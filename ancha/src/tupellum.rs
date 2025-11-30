@@ -55,6 +55,7 @@ impl<'a, A: Default, B: Default> Default for TupellumAnchizeFromTuple<'a, A, B> 
     }
 }
 
+/// Implementation for owned tuples `(A::Origin, B::Origin)`.
 impl<'a, A: Anchize<'a>, B: Anchize<'a, Context = A::Context>> Anchize<'a>
     for TupellumAnchizeFromTuple<'a, A, B>
 {
@@ -75,6 +76,54 @@ impl<'a, A: Anchize<'a>, B: Anchize<'a, Context = A::Context>> Anchize<'a>
     ) -> BuildCursor<After> {
         let vcur = self.a_ancha.anchize(&origin.0, context, cur.transmute());
         self.b_ancha.anchize(&origin.1, context, vcur)
+    }
+}
+
+/// New struct for reference-based tupellum anchization.
+#[derive(Clone, Copy)]
+pub struct TupellumAnchizeFromRefs<'a, A, B> {
+    pub a_ancha: A,
+    pub b_ancha: B,
+    _phantom: PhantomData<&'a (A, B)>,
+}
+
+impl<'a, A, B> TupellumAnchizeFromRefs<'a, A, B> {
+    pub fn new(a_ancha: A, b_ancha: B) -> Self {
+        TupellumAnchizeFromRefs { a_ancha, b_ancha, _phantom: PhantomData }
+    }
+}
+
+impl<'a, A: Default, B: Default> Default for TupellumAnchizeFromRefs<'a, A, B> {
+    fn default() -> Self {
+        TupellumAnchizeFromRefs {
+            a_ancha: Default::default(),
+            b_ancha: Default::default(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// Implementation for reference tuples `(&A::Origin, &B::Origin)`.
+impl<'a, A: Anchize<'a>, B: Anchize<'a, Context = A::Context>> Anchize<'a>
+    for TupellumAnchizeFromRefs<'a, A, B>
+{
+    type Origin = (&'a A::Origin, &'a B::Origin);
+    type Ancha = Tupellum<'a, A::Ancha, B::Ancha>;
+    type Context = A::Context;
+
+    fn reserve(&self, origin: &Self::Origin, context: &mut Self::Context, sz: &mut Reserve) {
+        self.a_ancha.reserve(origin.0, context, sz);
+        self.b_ancha.reserve(origin.1, context, sz);
+    }
+
+    unsafe fn anchize<After>(
+        &self,
+        origin: &Self::Origin,
+        context: &mut Self::Context,
+        cur: BuildCursor<Self::Ancha>,
+    ) -> BuildCursor<After> {
+        let vcur = self.a_ancha.anchize(origin.0, context, cur.transmute());
+        self.b_ancha.anchize(origin.1, context, vcur)
     }
 }
 
