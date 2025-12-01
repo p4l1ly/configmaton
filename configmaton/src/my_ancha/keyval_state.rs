@@ -46,6 +46,32 @@ pub struct KeyValState<'a> {
 }
 
 // ============================================================================
+// KeyValState Query Methods
+// ============================================================================
+
+use ancha::list::AnchaListIter;
+
+pub struct SparseIterator<'a>(AnchaListIter<'a, Tran0<'a>>);
+
+impl<'a> ancha::UnsafeIterator for SparseIterator<'a> {
+    type Item = (&'a [u8], &'a InitsAndFinals<'a>);
+
+    unsafe fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|tupellum| {
+            let key_vec: &AnchaVec<u8> = &tupellum.a;
+            let inits_and_finals: &InitsAndFinals = key_vec.behind();
+            (key_vec.as_ref(), inits_and_finals)
+        })
+    }
+}
+
+impl<'a> KeyValState<'a> {
+    pub unsafe fn keyvals(&self) -> SparseIterator<'a> {
+        SparseIterator(self.sparse.iter())
+    }
+}
+
+// ============================================================================
 // Origin Types
 // ============================================================================
 
@@ -468,7 +494,6 @@ impl<'a> Deanchize<'a> for KeyValStateDeanchize {
 mod tests {
     use super::*;
     use ancha::bdd::BddOrigin;
-    use ancha::sediment::{AnchaSediment, SedimentAnchizeFromVec, SedimentDeanchize};
     use ancha::BuildCursor;
 
     /// Test context that implements GetQptrs for both KV and U8 state pointers.

@@ -217,6 +217,16 @@ pub fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
+/// Align a const pointer up to the required alignment of type B.
+pub fn align_up_ptr<A, B>(a: *const A) -> *const B {
+    align_up(a as usize, std::mem::align_of::<B>()) as *const B
+}
+
+/// Align a mutable pointer up to the required alignment of type B.
+pub fn align_up_mut_ptr<A, B>(a: *mut A) -> *mut B {
+    align_up(a as usize, std::mem::align_of::<B>()) as *mut B
+}
+
 /// Get a pointer to data behind a struct with proper alignment.
 ///
 /// # Safety

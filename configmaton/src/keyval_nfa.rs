@@ -8,27 +8,14 @@ use serde_json;
 use serde_json::Value;
 
 use crate::ast;
-use crate::blob::align_up_mut_ptr;
-use crate::blob::automaton::Automaton;
-use crate::blob::automaton::ExtsAndAut;
-use crate::blob::automaton::InitsAndStates;
-use crate::blob::automaton::States;
-use crate::blob::bdd::BddOrigin;
-use crate::blob::keyval_state::Bytes;
-use crate::blob::keyval_state::KeyValState;
-use crate::blob::keyval_state::LeafOrigin;
-use crate::blob::keyval_state::StateOrigin;
-use crate::blob::keyval_state::TranOrigin;
-use crate::blob::sediment::Sediment;
-use crate::blob::state::build::U8BuildConfig;
-use crate::blob::state::U8State;
-use crate::blob::state::U8StatePrepared;
-use crate::blob::vec::BlobVec;
-use crate::blob::BuildCursor;
-use crate::blob::Reserve;
-use crate::blob::Shifter;
 use crate::char_enfa;
 use crate::char_nfa;
+use crate::my_ancha::automaton::Automaton;
+use crate::my_ancha::keyval_state::{LeafOrigin, StateOrigin, TranOrigin};
+use crate::my_ancha::state::{U8BuildConfig, U8StatePrepared};
+use ancha::align_up_mut_ptr;
+use ancha::bdd::BddOrigin;
+use ancha::{Anchize, BuildCursor, Deanchize, Reserve};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StateIx(pub usize);
@@ -510,6 +497,9 @@ unsafe impl Send for Msg {}
 
 impl Msg {
     pub fn data_len(&self) -> usize {
+        // owner is allocated as sz.0 + size_of::<usize>() where sz.0 is the actual data size
+        // So data length is owner.len() - size_of::<usize>()
+        // This works because we write from the aligned data pointer, not from the start of owner
         self.owner.len() - size_of::<usize>()
     }
 
@@ -526,176 +516,37 @@ impl Msg {
     }
 
     pub unsafe fn deserialize<'a>(buf: *mut u8) {
+        use crate::my_ancha::automaton::AutomatonDeanchize;
+
         let cur = BuildCursor::new(buf);
-        let shifter = Shifter(cur.buf);
-        let _: BuildCursor<()> = unsafe {
-            Automaton::deserialize(
-                cur,
-                |cur| Sediment::<Bytes>::deserialize(cur, |cur| Bytes::deserialize(cur, |_| ())),
-                |cur| {
-                    ExtsAndAut::deserialize(
-                        cur,
-                        |cur| {
-                            Sediment::<Bytes>::deserialize(cur, |cur| {
-                                Bytes::deserialize(cur, |_| ())
-                            })
-                        },
-                        |cur| {
-                            InitsAndStates::deserialize(
-                                cur,
-                                |cur| {
-                                    BlobVec::<*const KeyValState>::deserialize(cur, |x| {
-                                        shifter.shift(x);
-                                    })
-                                },
-                                |cur| {
-                                    States::deserialize(
-                                        cur,
-                                        |cur| {
-                                            Sediment::<KeyValState>::deserialize(cur, |cur| {
-                                                KeyValState::deserialize(cur)
-                                            })
-                                        },
-                                        |cur| {
-                                            Sediment::<U8State>::deserialize(cur, |cur| {
-                                                U8State::deserialize(cur)
-                                            })
-                                        },
-                                    )
-                                },
-                            )
-                        },
-                    )
-                },
-            )
-        };
+        let deanch = AutomatonDeanchize::default();
+        let _: BuildCursor<()> = deanch.deanchize(cur);
     }
 
     pub fn serialize<Cfg: U8BuildConfig>(parser: &Parser, init: &LeafOrigin, cfg: &Cfg) -> Msg {
+        use crate::my_ancha::automaton::{AutomatonAnchize, AutomatonContext};
+
         let u8states =
             parser.nfa.states.iter().map(|q| U8StatePrepared::prepare(q, cfg)).collect::<Vec<_>>();
+
+        // Build the origin matching TupellumAnchizeFromRefs expectation
+        // Each level expects (&A, &B) where A and B are the next level down
+        let states_origin = (&parser.states, &u8states);
+        let inits_and_states_origin = (&init.states, &states_origin);
+        let exts_and_aut_origin = (&init.exts, &inits_and_states_origin);
+        let origin = (&init.get_olds, &exts_and_aut_origin);
+
+        let mut context = AutomatonContext::default();
         let mut sz = Reserve(0);
-        let mut u8qs = Vec::<usize>::new();
-        let mut kvqs = Vec::<usize>::new();
-        let mut origin = (
-            &init.get_olds,
-            (&init.exts, (vec![0; init.states.len()], (&parser.states, &u8states))),
-        );
 
-        Automaton::reserve(
-            &origin,
-            &mut sz,
-            |getolds, sz| {
-                Sediment::<Bytes>::reserve(getolds, sz, |getold, sz| {
-                    Bytes::reserve(getold, sz);
-                });
-            },
-            |exts_and_aut, sz| {
-                ExtsAndAut::reserve(
-                    exts_and_aut,
-                    sz,
-                    |exts, sz| {
-                        Sediment::<Bytes>::reserve(exts, sz, |ext, sz| {
-                            Bytes::reserve(ext, sz);
-                        });
-                    },
-                    |inits_and_states, sz| {
-                        InitsAndStates::reserve(
-                            inits_and_states,
-                            sz,
-                            |inits, sz| {
-                                BlobVec::<*const KeyValState>::reserve(inits, sz);
-                            },
-                            |states, sz| {
-                                States::reserve(
-                                    states,
-                                    sz,
-                                    |orig_kvqs, sz| {
-                                        Sediment::<KeyValState>::reserve(
-                                            orig_kvqs,
-                                            sz,
-                                            |kvq, sz| kvqs.push(KeyValState::reserve(kvq, sz)),
-                                        );
-                                    },
-                                    |orig_u8qs, sz| {
-                                        Sediment::<U8State>::reserve(orig_u8qs, sz, |u8q, sz| {
-                                            u8qs.push(U8State::reserve(u8q, sz))
-                                        });
-                                    },
-                                );
-                            },
-                        );
-                    },
-                );
-            },
-        );
-
-        for (target, source) in origin.1 .1 .0.iter_mut().zip(init.states.iter()) {
-            *target = kvqs[*source];
-        }
+        let ancha = AutomatonAnchize::default();
+        ancha.reserve(&origin, &mut context, &mut sz);
 
         let mut buff = vec![0; sz.0 + size_of::<usize>()].into_boxed_slice();
         let buf = align_up_mut_ptr::<u8, u128>(buff.as_mut_ptr()) as *mut u8;
         let cur = BuildCursor::new(buf);
-        let _: BuildCursor<()> = unsafe {
-            Automaton::serialize(
-                &origin,
-                cur,
-                |getolds, cur| {
-                    Sediment::<Bytes>::serialize(getolds, cur, |getold, cur| {
-                        Bytes::serialize(getold, cur, |x, y| {
-                            *y = *x;
-                        })
-                    })
-                },
-                |exts_and_aut, cur| {
-                    ExtsAndAut::serialize(
-                        exts_and_aut,
-                        cur,
-                        |exts, cur| {
-                            Sediment::<Bytes>::serialize(exts, cur, |ext, cur| {
-                                Bytes::serialize(ext, cur, |x, y| {
-                                    *y = *x;
-                                })
-                            })
-                        },
-                        |inits_and_states, cur| {
-                            InitsAndStates::serialize(
-                                inits_and_states,
-                                cur,
-                                |inits, cur| {
-                                    BlobVec::<*const KeyValState>::serialize(inits, cur, |x, y| {
-                                        *y = *x as *const KeyValState;
-                                    })
-                                },
-                                |states, cur| {
-                                    States::serialize(
-                                        states,
-                                        cur,
-                                        |orig_kvqs, cur| {
-                                            Sediment::<KeyValState>::serialize(
-                                                orig_kvqs,
-                                                cur,
-                                                |kvq, cur| {
-                                                    KeyValState::serialize(kvq, cur, &u8qs, &kvqs)
-                                                },
-                                            )
-                                        },
-                                        |orig_u8qs, cur| {
-                                            Sediment::<U8State>::serialize(
-                                                orig_u8qs,
-                                                cur,
-                                                |u8q, cur| U8State::serialize(u8q, cur, &u8qs),
-                                            )
-                                        },
-                                    )
-                                },
-                            )
-                        },
-                    )
-                },
-            )
-        };
+
+        let _: BuildCursor<()> = unsafe { ancha.anchize(&origin, &mut context, cur) };
 
         Msg { owner: buff, data: buf }
     }
@@ -705,7 +556,7 @@ impl Msg {
 mod tests {
     use indexmap::IndexSet;
 
-    use crate::{blob::tests::TestU8BuildConfig, keyval_simulator::Simulation};
+    use crate::{keyval_simulator::Simulation, my_ancha::state::TestU8BuildConfig};
 
     use super::*;
 

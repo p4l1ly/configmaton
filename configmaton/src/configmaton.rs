@@ -1,5 +1,5 @@
-use crate::blob::automaton::Automaton;
 use crate::keyval_simulator::Simulation;
+use crate::my_ancha::automaton::Automaton;
 use crate::onion::{Locker, Onion};
 
 pub struct Configmaton<'a, L: Locker> {
@@ -56,8 +56,8 @@ impl<'a, L: Locker> Configmaton<'a, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::blob::tests::TestU8BuildConfig;
     use crate::keyval_nfa::{Cmd, Msg, Parser};
+    use crate::my_ancha::state::TestU8BuildConfig;
 
     use crate::onion::ThreadUnsafeLocker;
 

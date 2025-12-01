@@ -1,6 +1,6 @@
-use configmaton::blob::automaton::Automaton;
 use configmaton::configmaton::Configmaton;
 use configmaton::keyval_nfa::Msg;
+use configmaton::my_ancha::automaton::Automaton;
 use configmaton::onion::ThreadUnsafeLocker;
 
 type MyConfigmaton = Configmaton<'static, ThreadUnsafeLocker>;

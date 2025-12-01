@@ -1,6 +1,5 @@
 pub use ancha;
 pub mod ast;
-pub mod blob; // TODO: Migrate to ancha and remove
 pub mod char_enfa;
 pub mod char_nfa;
 pub mod char_runner;

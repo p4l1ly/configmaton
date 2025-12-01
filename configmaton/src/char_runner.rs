@@ -1,9 +1,7 @@
 use indexmap::IndexSet;
 
-use crate::blob::{
-    state::{U8State, U8StateIterator},
-    UnsafeIterator,
-};
+use crate::my_ancha::state::{U8State, U8StateIterator};
+use ancha::UnsafeIterator;
 
 pub struct Runner<'a> {
     pub states: IndexSet<*const U8State<'a>>,
@@ -46,7 +44,9 @@ impl<'a> Runner<'a> {
 mod tests {
     use hashbrown::HashSet;
 
-    use crate::{blob::tests::create_states, char_enfa::OrderedIxs, char_nfa, guards::Guard};
+    use crate::{
+        char_enfa::OrderedIxs, char_nfa, guards::Guard, my_ancha::state::tests::create_states,
+    };
 
     use super::*;
 

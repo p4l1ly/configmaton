@@ -521,11 +521,105 @@ where
 }
 
 // ============================================================================
+// Build Configuration and Preparation
+// ============================================================================
+
+/// Configuration trait for building U8State structures.
+pub trait U8BuildConfig {
+    fn guard_size_keep(&self) -> u32;
+    fn hashmap_cap_power_fn(&self, len: usize) -> usize;
+    fn dense_guard_count(&self) -> usize;
+}
+
+/// Test configuration for U8State building.
+pub struct TestU8BuildConfig;
+
+impl U8BuildConfig for TestU8BuildConfig {
+    fn guard_size_keep(&self) -> u32 {
+        2
+    }
+    fn hashmap_cap_power_fn(&self, _len: usize) -> usize {
+        1
+    }
+    fn dense_guard_count(&self) -> usize {
+        3
+    }
+}
+
+impl U8StatePrepared {
+    /// Prepare a U8State from a char_nfa::State with the given configuration.
+    pub fn prepare<Cfg: U8BuildConfig>(old: &crate::char_nfa::State, cfg: &Cfg) -> Self {
+        use hashbrown::HashMap;
+
+        if old.transitions.len() < cfg.dense_guard_count() {
+            // Sparse state
+            let mut pattern_trans0 = HashMap::<crate::guards::Guard, Vec<usize>>::new();
+            let mut explicitized_guard_trans = Vec::<(crate::guards::Guard, usize)>::new();
+
+            for (guard, target) in old.transitions.iter().copied() {
+                if guard.size() >= cfg.guard_size_keep() {
+                    pattern_trans0.entry(guard).or_insert(Vec::new()).push(target);
+                } else {
+                    explicitized_guard_trans.push((guard, target));
+                }
+            }
+
+            let mut explicit_trans0 = HashMap::<u8, Vec<usize>>::new();
+            let mut c = 0u8;
+            loop {
+                for (guard, target) in explicitized_guard_trans.iter() {
+                    if guard.contains(c) {
+                        explicit_trans0.entry(c).or_insert(Vec::new()).push(*target);
+                    }
+                }
+                if c == 255 {
+                    break;
+                }
+                c += 1;
+            }
+
+            let hashmap_cap_power = cfg.hashmap_cap_power_fn(explicit_trans0.len());
+            let hashmap_cap = 1 << hashmap_cap_power;
+            let hashmap_mask = hashmap_cap - 1;
+            let mut hashmap_alists = Vec::<Vec<(u8, Vec<usize>)>>::with_capacity(hashmap_cap);
+            for _ in 0..hashmap_cap {
+                hashmap_alists.push(Vec::new())
+            }
+            for (c, targets) in explicit_trans0 {
+                hashmap_alists[c as usize & hashmap_mask].push((c, targets));
+            }
+
+            Self::Sparse(U8SparseStatePrepared {
+                tags: old.tags.0.clone(),
+                pattern_trans: pattern_trans0.into_iter().collect(),
+                explicit_trans: hashmap_alists,
+            })
+        } else {
+            // Dense state
+            let mut trans = std::array::from_fn(|_| Vec::new());
+            let mut c = 0u8;
+            loop {
+                for (guard, target) in old.transitions.iter() {
+                    if guard.contains(c) {
+                        trans[c as usize].push(*target);
+                    }
+                }
+                if c == 255 {
+                    break;
+                }
+                c += 1;
+            }
+            Self::Dense(U8DenseStatePrepared { tags: old.tags.0.clone(), trans })
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     // Helper context for tests
@@ -777,6 +871,15 @@ mod tests {
 
     pub unsafe fn create_states<'a>(
         buf: &'a mut Vec<u8>,
+        qs: Vec<crate::char_nfa::State>,
+    ) -> Vec<&'a U8State<'a>> {
+        let states: Vec<_> =
+            qs.iter().map(|q| U8StatePrepared::prepare(q, &TestU8BuildConfig)).collect();
+        create_states_from_prepared(buf, states)
+    }
+
+    pub unsafe fn create_states_from_prepared<'a>(
+        buf: &'a mut Vec<u8>,
         states: Vec<U8StatePrepared>,
     ) -> Vec<&'a U8State<'a>> {
         // Reserve space with dummy context (context not used in reserve phase)
@@ -796,7 +899,7 @@ mod tests {
         buf.resize(sz.0 + std::mem::size_of::<usize>() * 16, 0); // Extra padding for alignment
 
         // Calculate actual base address after alignment
-        let base = crate::blob::align_up_mut_ptr::<u8, u128>(buf.as_mut_ptr()) as *mut u8;
+        let base = ancha::align_up_mut_ptr::<u8, u128>(buf.as_mut_ptr()) as *mut u8;
 
         // Anchize phase - write all states
         // qptrs stores OFFSETS relative to buffer start (not absolute pointers)
@@ -867,7 +970,7 @@ mod tests {
         ];
 
         let mut buf = vec![];
-        let states = unsafe { create_states(&mut buf, prepared_states) };
+        let states = unsafe { create_states_from_prepared(&mut buf, prepared_states) };
         let state0 = states[0];
         let state1 = states[1];
 
